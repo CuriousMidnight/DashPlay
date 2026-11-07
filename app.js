@@ -9,6 +9,8 @@ import {
   sanitizeDrmConfig,
   readSource,
   createPlayerLink,
+  shortenShareLink,
+  resolveShortKey,
   sourceLabel,
 } from './player-utils.js';
 import { qualityChoices, screenshotFilename, initFrameCapture, captureFrame } from './player-tools.js';
@@ -399,6 +401,10 @@ function fail(title, message, { showDrmAction = false } = {}) {
   refreshScreenshot();
 }
 
+let shareLinkMode = 'playerShort';
+let currentShortInfo = null;
+let shortenSeq = 0;
+
 function buildShareSource() {
   if (!source) return null;
   return {
@@ -408,19 +414,67 @@ function buildShareSource() {
   };
 }
 
+function getDisplayedShareUrl(fullUrl) {
+  if (shareLinkMode === 'full') return fullUrl;
+  if (currentShortInfo && currentShortInfo.fullUrl === fullUrl) {
+    if (shareLinkMode === 'directShort' && currentShortInfo.directShortUrl) {
+      return currentShortInfo.directShortUrl;
+    }
+    if (currentShortInfo.playerShortUrl) {
+      return currentShortInfo.playerShortUrl;
+    }
+  }
+  return fullUrl;
+}
+
+function syncShareModeButtons() {
+  document.querySelectorAll('[data-share-mode]').forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.shareMode === shareLinkMode));
+  });
+}
+
+async function ensureShortenedForCurrentSource({ replaceAddress = true } = {}) {
+  const shareable = buildShareSource();
+  if (!shareable || shareable.url === exampleURL) return null;
+  const fullUrl = createPlayerLink(location.href, shareable);
+  if (currentShortInfo && currentShortInfo.fullUrl === fullUrl && currentShortInfo.code) {
+    if (replaceAddress) {
+      try { history.replaceState(null, '', currentShortInfo.playerShortUrl); } catch { /* ignore */ }
+    }
+    return currentShortInfo;
+  }
+  const seq = ++shortenSeq;
+  const info = await shortenShareLink(location.href, shareable);
+  if (seq !== shortenSeq) return info;
+  currentShortInfo = info;
+  if (info.code && replaceAddress) {
+    try { history.replaceState(null, '', info.playerShortUrl); } catch { /* ignore */ }
+  }
+  const latestShareable = buildShareSource();
+  if (latestShareable) {
+    const latestFull = createPlayerLink(location.href, latestShareable);
+    $('share-url').value = getDisplayedShareUrl(latestFull);
+  }
+  return info;
+}
+
 function updateAddress() {
   const shareable = buildShareSource();
-  if (!shareable) return;
+  if (!shareable || shareable.url === exampleURL) return;
   const href = createPlayerLink(location.href, shareable);
-  // Static hosts still receive index.html; query parameters are browser state.
-  try { history.replaceState(null, '', href); } catch { /* Player also works in restricted embeds. */ }
+  try { history.replaceState(null, '', getDisplayedShareUrl(href)); } catch { /* Player also works in restricted embeds. */ }
+  ensureShortenedForCurrentSource({ replaceAddress: true });
 }
 
 function refreshSharePanel() {
   const shareable = buildShareSource();
   if (!shareable) return;
-  const link = createPlayerLink(location.href, shareable);
-  $('share-url').value = link;
+  const fullUrl = createPlayerLink(location.href, shareable);
+  syncShareModeButtons();
+  $('share-url').value = getDisplayedShareUrl(fullUrl);
+  if (shareable.url !== exampleURL) {
+    ensureShortenedForCurrentSource({ replaceAddress: true });
+  }
 
   const tags = [];
   tags.push({ label: 'Format', value: FORMAT_LABELS[shareable.type] || shareable.type.toUpperCase() });
@@ -1229,12 +1283,27 @@ $('example-button').addEventListener('click', () => {
   loadSource(exampleURL, 'flv', false, { example: true });
 });
 
+document.querySelectorAll('[data-share-mode]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    shareLinkMode = btn.dataset.shareMode || 'playerShort';
+    refreshSharePanel();
+  });
+});
+
 async function copyShareableLink() {
   const shareable = buildShareSource();
   if (!shareable) return;
-  const link = createPlayerLink(location.href, shareable);
+  const fullUrl = createPlayerLink(location.href, shareable);
   refreshSharePanel();
   $('share-fallback').hidden = false;
+
+  if (shareLinkMode !== 'full' && shareable.url !== exampleURL) {
+    $('copy-label').textContent = 'Shortening…';
+    await ensureShortenedForCurrentSource({ replaceAddress: true });
+  }
+  const link = getDisplayedShareUrl(fullUrl);
+  $('share-url').value = link;
+
   try {
     if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
     await navigator.clipboard.writeText(link);
@@ -1246,6 +1315,7 @@ async function copyShareableLink() {
       $('copy-share-again').textContent = 'Copy';
     }, 2500);
   } catch {
+    $('copy-label').textContent = 'Copy shareable link';
     $('share-url').focus();
     $('share-url').select();
   }
@@ -1265,13 +1335,44 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-function restoreLocation() {
-  const initial = readSource(location.search);
+async function restoreLocation() {
+  let initial = readSource(location.search);
+  renderSavedRulesLists();
+
+  if (!initial.url && initial.shortKey) {
+    const shortKey = initial.shortKey;
+    const shortProvider = initial.shortProvider;
+    status('Resolving short link…', 'loading');
+    $('source-name').textContent = `Short link (${shortKey})`;
+    try {
+      const resolvedHref = await resolveShortKey(shortKey, shortProvider);
+      const parsed = new URL(resolvedHref, location.href);
+      initial = readSource(parsed.search);
+      const canonicalFull = createPlayerLink(location.href, {
+        url: initial.url,
+        type: detectFormat(initial.url, initial.type),
+        live: initial.live,
+        headers: initial.headers,
+        drm: initial.drm,
+      });
+      currentShortInfo = {
+        code: shortKey,
+        provider: shortProvider,
+        directShortUrl: `${shortProvider === 'vgd' ? 'https://v.gd' : 'https://is.gd'}/${shortKey}`,
+        playerShortUrl: location.href,
+        fullUrl: canonicalFull,
+      };
+    } catch (error) {
+      fail('Short link could not be resolved', error.message);
+      return;
+    }
+  }
+
   $('video-url').value = initial.url;
   $('source-type').value = initial.type;
   $('live-stream').checked = initial.live;
   $('live-stream').disabled = !['flv', 'mp4', 'auto'].includes(initial.type);
-  renderSavedRulesLists();
+
   if (initial.url) {
     loadSource(initial.url, initial.type, initial.live, {
       updateURL: false,

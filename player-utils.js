@@ -172,6 +172,8 @@ export function decodeShareData(encoded) {
 
 export function readSource(search) {
   const params = new URLSearchParams(search);
+  const shortKey = params.get('k') || params.get('v') || '';
+  const shortProvider = params.get('v') ? 'vgd' : 'isgd';
   const url = params.get('url') || '';
   const type = SUPPORTED_FORMATS.includes(params.get('type')) ? params.get('type') : 'auto';
   const rawHeaders = params.get('headers') || params.get('h');
@@ -196,6 +198,8 @@ export function readSource(search) {
     live: params.has('live') ? params.get('live') === '1' : isKnownLiveFLV(url, type),
     headers,
     drm,
+    shortKey: /^[0-9A-Za-z_-]{3,32}$/.test(shortKey) ? shortKey : '',
+    shortProvider,
   };
 }
 
@@ -204,7 +208,13 @@ export function createPlayerLink(page, source) {
   link.search = '';
   link.hash = '';
   link.searchParams.set('url', source.url);
-  link.searchParams.set('type', source.type);
+
+  let autoDetected = null;
+  try { autoDetected = detectFormat(source.url, 'auto'); } catch { /* requires explicit type */ }
+  if (source.type && source.type !== autoDetected) {
+    link.searchParams.set('type', source.type);
+  }
+
   if (source.live && ['flv', 'mp4'].includes(source.type)) link.searchParams.set('live', '1');
   else if (isKnownLiveFLV(source.url, source.type)) link.searchParams.set('live', '0');
 
@@ -221,6 +231,112 @@ export function createPlayerLink(page, source) {
   }
 
   return link.href;
+}
+
+const SHORT_CACHE_KEY = 'urlplay.shortlinks.v1';
+
+function loadShortCache() {
+  try {
+    return JSON.parse(localStorage.getItem(SHORT_CACHE_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveShortCache(cache) {
+  try {
+    const entries = Object.entries(cache).slice(-60);
+    localStorage.setItem(SHORT_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch { /* ignore storage quota errors */ }
+}
+
+export function buildShortPlayerLink(page, code, provider = 'isgd') {
+  const link = new URL(page);
+  link.search = '';
+  link.hash = '';
+  link.searchParams.set(provider === 'vgd' ? 'v' : 'k', code);
+  return link.href;
+}
+
+export async function shortenShareLink(page, source) {
+  const fullUrl = createPlayerLink(page, source);
+  const cache = loadShortCache();
+  if (cache[fullUrl]?.code) {
+    const { code, provider, directShortUrl } = cache[fullUrl];
+    return {
+      code,
+      provider,
+      directShortUrl,
+      playerShortUrl: buildShortPlayerLink(page, code, provider),
+      fullUrl,
+    };
+  }
+
+  const endpoints = [
+    { provider: 'isgd', api: 'https://is.gd/create.php' },
+    { provider: 'vgd', api: 'https://v.gd/create.php' },
+  ];
+
+  for (const { provider, api } of endpoints) {
+    try {
+      const body = new URLSearchParams({ format: 'json', url: fullUrl });
+      const res = await fetch(api, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: body.toString(),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data?.shorturl) {
+        const parsed = new URL(data.shorturl);
+        const code = parsed.pathname.replace(/^\/+|\/+$/g, '');
+        if (code) {
+          cache[fullUrl] = { code, provider, directShortUrl: data.shorturl };
+          cache[`code:${provider}:${code}`] = fullUrl;
+          saveShortCache(cache);
+          return {
+            code,
+            provider,
+            directShortUrl: data.shorturl,
+            playerShortUrl: buildShortPlayerLink(page, code, provider),
+            fullUrl,
+          };
+        }
+      }
+    } catch { /* try next endpoint */ }
+  }
+
+  return {
+    code: '',
+    provider: '',
+    directShortUrl: '',
+    playerShortUrl: fullUrl,
+    fullUrl,
+  };
+}
+
+export async function resolveShortKey(code, provider = 'isgd') {
+  const cache = loadShortCache();
+  const cacheKey = `code:${provider}:${code}`;
+  if (typeof cache[cacheKey] === 'string' && cache[cacheKey]) {
+    return cache[cacheKey];
+  }
+
+  const host = provider === 'vgd' ? 'https://v.gd' : 'https://is.gd';
+  const reqUrl = `${host}/forward.php?format=json&shorturl=${encodeURIComponent(code)}`;
+  const res = await fetch(reqUrl);
+  if (!res.ok) throw new Error(`Short link lookup failed (HTTP ${res.status}).`);
+  const data = await res.json();
+  if (!data?.url) {
+    throw new Error(data?.errormessage || 'This short link was not found or has expired.');
+  }
+  const unescaped = String(data.url)
+    .replaceAll('&amp;', '&')
+    .replaceAll('&#038;', '&')
+    .replaceAll('&quot;', '"');
+  cache[cacheKey] = unescaped;
+  saveShortCache(cache);
+  return unescaped;
 }
 
 export function sourceLabel(url) {
