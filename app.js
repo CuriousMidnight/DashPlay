@@ -16,6 +16,10 @@ import {
   findOrRegisterLocalAlias,
   resolveAliasSlug,
   buildStreamsJsonString,
+  loadGithubSyncConfig,
+  saveGithubSyncConfig,
+  clearGithubSyncConfig,
+  pushStreamToGithubRepo,
   sourceLabel,
 } from './player-utils.js';
 import { qualityChoices, screenshotFilename, initFrameCapture, captureFrame } from './player-tools.js';
@@ -436,15 +440,58 @@ function syncShareModeButtons() {
   $('share-alias-row').hidden = shareLinkMode !== 'alias';
 }
 
-function updateAliasStatusUI() {
+function updateAliasStatusUI(customMsg = '') {
   $('alias-slug-input').value = currentAliasSlug;
   const statusEl = $('alias-repo-status');
+  if (customMsg) {
+    statusEl.dataset.inRepo = String(currentAliasInRepo);
+    statusEl.textContent = customMsg;
+    return;
+  }
+  const ghCfg = loadGithubSyncConfig();
   if (currentAliasInRepo) {
     statusEl.dataset.inRepo = 'true';
-    statusEl.textContent = '✓ In streams.json — this short ?s= link works for all friends!';
+    statusEl.textContent = '✓ In GitHub streams.json — this short ?s= link works for all friends!';
+  } else if (ghCfg.token) {
+    statusEl.dataset.inRepo = 'false';
+    statusEl.textContent = 'Click "Save to GitHub" to commit this ?s= link to streams.json';
   } else {
     statusEl.dataset.inRepo = 'false';
-    statusEl.textContent = 'Local only until added to streams.json · Use Compact (?z=…) to share immediately without uploading streams.json';
+    statusEl.textContent = 'Click "Auto-Sync Settings" to auto-save to GitHub streams.json, or use Compact (?z=…)';
+  }
+}
+
+async function pushCurrentStreamToGithub({ isAuto = false } = {}) {
+  const shareable = buildShareSource();
+  if (!shareable || shareable.url === exampleURL) return false;
+  const slug = $('alias-slug-input').value.trim().replace(/[^0-9A-Za-z_-]/g, '') || currentAliasSlug;
+  const btn = $('push-github-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  updateAliasStatusUI('Saving to GitHub streams.json…');
+  try {
+    const res = await pushStreamToGithubRepo(slug, shareable);
+    currentAliasSlug = res.slug;
+    currentAliasInRepo = true;
+    repoStreamsMap = res.streams;
+    if (!shareLinkModeManual) shareLinkMode = 'alias';
+    syncShareModeButtons();
+    updateAliasStatusUI();
+    const latest = buildShareSource();
+    if (latest) {
+      $('share-url').value = getDisplayedShareUrl(latest);
+      try {
+        history.replaceState(null, '', createAliasPlayerLink(location.href, currentAliasSlug));
+      } catch { /* ignore */ }
+    }
+    btn.textContent = 'Saved!';
+    setTimeout(() => { btn.textContent = 'Save to GitHub'; btn.disabled = false; }, 2000);
+    return true;
+  } catch (error) {
+    btn.textContent = 'Save to GitHub';
+    btn.disabled = false;
+    updateAliasStatusUI(isAuto ? `Auto-sync skipped: ${error.message}` : `GitHub error: ${error.message}`);
+    return false;
   }
 }
 
@@ -463,8 +510,9 @@ async function syncLocalAliasForCurrentSource({ replaceAddress = true, preferred
     currentAliasSlug = found.slug;
     currentAliasInRepo = found.inRepo;
   }
+  const ghCfg = loadGithubSyncConfig();
   if (!shareLinkModeManual) {
-    shareLinkMode = currentAliasInRepo ? 'alias' : 'compact';
+    shareLinkMode = (currentAliasInRepo || (ghCfg.token && ghCfg.autoSync)) ? 'alias' : 'compact';
   }
   syncShareModeButtons();
   updateAliasStatusUI();
@@ -476,6 +524,9 @@ async function syncLocalAliasForCurrentSource({ replaceAddress = true, preferred
         history.replaceState(null, '', createAliasPlayerLink(location.href, currentAliasSlug));
       } catch { /* ignore */ }
     }
+  }
+  if (!currentAliasInRepo && ghCfg.token && ghCfg.autoSync) {
+    await pushCurrentStreamToGithub({ isAuto: true });
   }
 }
 
@@ -1332,6 +1383,68 @@ $('alias-slug-input').addEventListener('keydown', (event) => {
   }
 });
 
+$('push-github-btn').addEventListener('click', () => {
+  const cfg = loadGithubSyncConfig();
+  if (!cfg.token) {
+    openGhSyncModal();
+    return;
+  }
+  pushCurrentStreamToGithub({ isAuto: false });
+});
+
+function openGhSyncModal() {
+  const cfg = loadGithubSyncConfig();
+  $('gh-repo-input').value = cfg.repo;
+  $('gh-branch-input').value = cfg.branch;
+  $('gh-token-input').value = cfg.token;
+  $('gh-auto-sync-checkbox').checked = cfg.autoSync;
+  $('gh-sync-error').hidden = true;
+  $('gh-sync-modal').hidden = false;
+  setTimeout(() => $('gh-token-input').focus(), 0);
+}
+
+function closeGhSyncModal() {
+  $('gh-sync-modal').hidden = true;
+}
+
+$('open-gh-sync').addEventListener('click', openGhSyncModal);
+$('gh-sync-close-x').addEventListener('click', closeGhSyncModal);
+$('gh-sync-cancel').addEventListener('click', closeGhSyncModal);
+$('gh-sync-modal').addEventListener('click', (event) => {
+  if (event.target === $('gh-sync-modal')) closeGhSyncModal();
+});
+
+$('gh-sync-clear').addEventListener('click', () => {
+  clearGithubSyncConfig();
+  closeGhSyncModal();
+  updateAliasStatusUI('GitHub token removed from browser.');
+});
+
+$('gh-sync-save').addEventListener('click', async () => {
+  $('gh-sync-error').hidden = true;
+  const repo = $('gh-repo-input').value.trim();
+  const branch = $('gh-branch-input').value.trim() || 'main';
+  const token = $('gh-token-input').value.trim();
+  const autoSync = $('gh-auto-sync-checkbox').checked;
+
+  if (!repo || !/^[^/\s]+\/[^/\s]+$/.test(repo)) {
+    $('gh-sync-error').textContent = 'Enter a valid GitHub repository in owner/repo format (for example: curiousmidnight/DashPlay).';
+    $('gh-sync-error').hidden = false;
+    $('gh-repo-input').focus();
+    return;
+  }
+  if (!token) {
+    $('gh-sync-error').textContent = 'Paste a GitHub Personal Access Token with Contents (Read and write) permission.';
+    $('gh-sync-error').hidden = false;
+    $('gh-token-input').focus();
+    return;
+  }
+
+  saveGithubSyncConfig({ repo, branch, token, autoSync });
+  closeGhSyncModal();
+  await pushCurrentStreamToGithub({ isAuto: false });
+});
+
 $('download-streams-json').addEventListener('click', async () => {
   const shareable = buildShareSource();
   if (!shareable) return;
@@ -1356,6 +1469,12 @@ async function copyShareableLink() {
   if (!shareable) return;
   refreshSharePanel();
   $('share-fallback').hidden = false;
+
+  const ghCfg = loadGithubSyncConfig();
+  if (shareLinkMode === 'alias' && !currentAliasInRepo && ghCfg.token) {
+    await pushCurrentStreamToGithub({ isAuto: true });
+  }
+
   const link = getDisplayedShareUrl(shareable);
   $('share-url').value = link;
 
@@ -1387,6 +1506,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (!$('site-headers-modal').hidden) closeSiteHeadersModal();
     if (!$('drm-modal').hidden) closeDrmModal();
+    if (!$('gh-sync-modal').hidden) closeGhSyncModal();
   }
 });
 

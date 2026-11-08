@@ -411,21 +411,164 @@ export function createAliasPlayerLink(page, slug) {
 }
 
 const LOCAL_ALIASES_KEY = 'urlplay.local_aliases.v1';
+const GH_SYNC_KEY = 'urlplay.gh_sync.v1';
 let repoStreamsCache = null;
 
-export async function loadRepoStreams() {
-  if (repoStreamsCache) return repoStreamsCache;
+export function detectGithubRepoFromLocation(loc = window.location) {
+  try {
+    const host = String(loc.hostname || '').toLowerCase();
+    if (host.endsWith('.github.io')) {
+      const owner = host.slice(0, -'.github.io'.length);
+      const segs = String(loc.pathname || '').split('/').filter(Boolean);
+      const repo = segs[0] && !segs[0].endsWith('.html') ? segs[0] : `${owner}.github.io`;
+      return `${owner}/${repo}`;
+    }
+  } catch { /* ignore */ }
+  return 'curiousmidnight/DashPlay';
+}
+
+export function loadGithubSyncConfig() {
+  const defaultRepo = detectGithubRepoFromLocation();
+  try {
+    const raw = JSON.parse(localStorage.getItem(GH_SYNC_KEY) || '{}') || {};
+    return {
+      repo: typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : defaultRepo,
+      branch: typeof raw.branch === 'string' && raw.branch.trim() ? raw.branch.trim() : 'main',
+      token: typeof raw.token === 'string' ? raw.token.trim() : '',
+      autoSync: raw.autoSync !== false,
+    };
+  } catch {
+    return { repo: defaultRepo, branch: 'main', token: '', autoSync: true };
+  }
+}
+
+export function saveGithubSyncConfig(config) {
+  const current = loadGithubSyncConfig();
+  const next = {
+    repo: String(config.repo ?? current.repo).trim() || detectGithubRepoFromLocation(),
+    branch: String(config.branch ?? current.branch).trim() || 'main',
+    token: String(config.token ?? current.token).trim(),
+    autoSync: Boolean(config.autoSync ?? current.autoSync),
+  };
+  try {
+    localStorage.setItem(GH_SYNC_KEY, JSON.stringify(next));
+  } catch { /* ignore */ }
+  return next;
+}
+
+export function clearGithubSyncConfig() {
+  try { localStorage.removeItem(GH_SYNC_KEY); } catch { /* ignore */ }
+}
+
+function decodeBase64Utf8(b64) {
+  const binary = atob(String(b64 || '').replace(/\s+/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+function encodeBase64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+export async function fetchGithubApiStreams(repo = '', branch = '', token = '') {
+  const cfg = loadGithubSyncConfig();
+  const targetRepo = repo || cfg.repo;
+  const targetBranch = branch || cfg.branch;
+  const authToken = token || cfg.token;
+  if (!targetRepo || !targetRepo.includes('/')) return { streams: {}, sha: '' };
+
+  const headers = { Accept: 'application/vnd.github+json' };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+
+  const apiUrl = `https://api.github.com/repos/${targetRepo}/contents/streams.json${targetBranch ? `?ref=${encodeURIComponent(targetBranch)}` : ''}`;
+  const res = await fetch(apiUrl, { headers, cache: 'no-store' });
+  if (res.status === 404) return { streams: {}, sha: '' };
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.message) detail = errJson.message;
+    } catch { /* ignore */ }
+    throw new Error(`GitHub API error (${detail})`);
+  }
+  const data = await res.json();
+  const content = data?.content ? decodeBase64Utf8(data.content) : '{}';
+  const parsed = JSON.parse(content);
+  const streams = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  repoStreamsCache = { ...(repoStreamsCache || {}), ...streams };
+  return { streams, sha: data?.sha || '' };
+}
+
+export async function pushStreamToGithubRepo(slug, source) {
+  const cfg = loadGithubSyncConfig();
+  if (!cfg.token) {
+    throw new Error('Add a GitHub Personal Access Token first to auto-update streams.json.');
+  }
+  const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '') || generateDefaultSlug(source);
+  const { streams: existing, sha } = await fetchGithubApiStreams(cfg.repo, cfg.branch, cfg.token);
+
+  const entry = {
+    title: sourceLabel(source.url),
+    url: source.url,
+    type: source.type || 'auto',
+    ...(source.live ? { live: true } : {}),
+    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
+    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+  };
+
+  if (existing[cleanSlug] && sourcesMatch(existing[cleanSlug], entry)) {
+    repoStreamsCache = existing;
+    return { slug: cleanSlug, alreadySaved: true, streams: existing };
+  }
+
+  const nextStreams = { ...existing, [cleanSlug]: entry };
+  const jsonText = `${JSON.stringify(nextStreams, null, 2)}\n`;
+  const apiUrl = `https://api.github.com/repos/${cfg.repo}/contents/streams.json`;
+
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${cfg.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message: `Save stream preset "${cleanSlug}" via URLPlay`,
+      content: encodeBase64Utf8(jsonText),
+      ...(cfg.branch ? { branch: cfg.branch } : {}),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+
+  if (!putRes.ok) {
+    let detail = `HTTP ${putRes.status}`;
+    try {
+      const errJson = await putRes.json();
+      if (errJson?.message) detail = errJson.message;
+    } catch { /* ignore */ }
+    throw new Error(`Could not save to streams.json (${detail})`);
+  }
+
+  repoStreamsCache = nextStreams;
+  saveLocalAlias(cleanSlug, source);
+  return { slug: cleanSlug, alreadySaved: false, streams: nextStreams };
+}
+
+export async function loadRepoStreams({ forceRefresh = false } = {}) {
+  if (repoStreamsCache && !forceRefresh) return repoStreamsCache;
   try {
     const res = await fetch(new URL('streams.json', document.baseURI).href, { cache: 'no-cache' });
-    if (!res.ok) {
-      repoStreamsCache = {};
+    if (res.ok) {
+      const data = await res.json();
+      repoStreamsCache = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
       return repoStreamsCache;
     }
-    const data = await res.json();
-    repoStreamsCache = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-  } catch {
-    repoStreamsCache = {};
-  }
+  } catch { /* ignore */ }
+  repoStreamsCache = repoStreamsCache || {};
   return repoStreamsCache;
 }
 
@@ -505,7 +648,19 @@ export function findOrRegisterLocalAlias(source, repoStreams = {}) {
 export async function resolveAliasSlug(slug) {
   const repo = await loadRepoStreams();
   const local = loadLocalAliases();
-  const entry = local[slug] || repo[slug];
+  let entry = repo[slug] || local[slug];
+  let inRepo = Boolean(repo[slug]);
+
+  if (!entry?.url) {
+    try {
+      const { streams: liveRepoStreams } = await fetchGithubApiStreams();
+      if (liveRepoStreams?.[slug]?.url) {
+        entry = liveRepoStreams[slug];
+        inRepo = true;
+      }
+    } catch { /* fallback if offline or rate-limited */ }
+  }
+
   if (!entry || !entry.url) return null;
   return {
     url: entry.url,
@@ -513,7 +668,7 @@ export async function resolveAliasSlug(slug) {
     live: Boolean(entry.live) || isKnownLiveFLV(entry.url, entry.type),
     headers: sanitizeHeaders(entry.headers),
     drm: sanitizeDrmConfig(entry.drm),
-    inRepo: Boolean(repo[slug]),
+    inRepo,
   };
 }
 

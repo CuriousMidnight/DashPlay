@@ -133,7 +133,9 @@
           <input id="alias-slug-input" class="alias-slug-input" type="text" placeholder="lemino" spellcheck="false">
           <button id="save-alias-slug" class="rule-btn" type="button">Apply name</button>
           <span id="alias-repo-status" class="alias-repo-status"></span>
-          <button id="download-streams-json" class="rule-btn" type="button" title="Download updated streams.json to commit to your GitHub repo so ?s=... works for everyone">Download streams.json</button>
+          <button id="push-github-btn" class="rule-btn rule-btn--accent" type="button" title="Commit this stream directly to streams.json in your GitHub repository">Save to GitHub</button>
+          <button id="open-gh-sync" class="rule-btn" type="button" title="Configure GitHub token for automatic streams.json updates">Auto-Sync Settings</button>
+          <button id="download-streams-json" class="rule-btn" type="button" title="Download updated streams.json file">Download JSON</button>
         </div>
         <div id="share-meta" class="share-meta"></div>
       </div>
@@ -322,6 +324,56 @@
         <div class="modal-actions-right">
           <button id="drm-cancel" type="button" class="modal-btn">Cancel</button>
           <button id="drm-apply" type="button" class="modal-btn modal-btn--primary">Apply DRM</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: GitHub Auto-Sync (streams.json) -->
+  <div id="gh-sync-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="gh-sync-title" hidden>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <span class="feature-tag">100% LOCALIZED GITHUB PAGES SHORTENER</span>
+          <h2 id="gh-sync-title" class="modal-title">Auto-Save to GitHub <code>streams.json</code></h2>
+          <p class="modal-subtitle">Automatically commit loaded streams into <code>streams.json</code> in your GitHub repository so short <code>?s=…</code> links work for all your friends without manual file uploads.</p>
+        </div>
+        <button id="gh-sync-close-x" class="modal-close-x" type="button" aria-label="Close">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <label class="modal-field">
+          <span class="field-label">GitHub Repository (<code>owner/repo</code>)</span>
+          <input id="gh-repo-input" type="text" spellcheck="false" autocomplete="off" placeholder="curiousmidnight/DashPlay">
+        </label>
+
+        <label class="modal-field">
+          <span class="field-label">Branch</span>
+          <input id="gh-branch-input" type="text" spellcheck="false" autocomplete="off" placeholder="main" value="main">
+        </label>
+
+        <label class="modal-field">
+          <div class="field-label-row">
+            <span class="field-label">GitHub Personal Access Token (stored only in your browser)</span>
+            <a class="chip-button" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create Fine-Grained Token ↗</a>
+          </div>
+          <input id="gh-token-input" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_... or ghp_... (Contents: Read & write)">
+          <span style="font-size:11px;color:var(--muted)">Scope needed: <strong>Repository permissions → Contents → Read and write</strong> on your player repository. Never shared in links.</span>
+        </label>
+
+        <label class="modal-checkbox">
+          <input id="gh-auto-sync-checkbox" type="checkbox" checked>
+          <span>Automatically add every stream I load to <code>streams.json</code> in my GitHub repo</span>
+        </label>
+
+        <p id="gh-sync-error" class="modal-error" role="alert" hidden></p>
+      </div>
+
+      <div class="modal-actions">
+        <button id="gh-sync-clear" type="button" class="modal-btn modal-btn--danger">Remove Token</button>
+        <div class="modal-actions-right">
+          <button id="gh-sync-cancel" type="button" class="modal-btn">Cancel</button>
+          <button id="gh-sync-save" type="button" class="modal-btn modal-btn--primary">Save & Sync Current Stream</button>
         </div>
       </div>
     </div>
