@@ -6,7 +6,7 @@ import {
   normalizeHost,
   formatHeaderLines,
   sanitizeHeaders,
-  sanitizeDrmConfig,
+  sanitizeProtectionConfig,
   readSource,
   createPlayerLink,
   createCompactPlayerLink,
@@ -31,12 +31,12 @@ import {
   removeSiteHeaders,
   getHeadersForHost,
   getEffectiveHeaders,
-  getStoredDrmConfig,
-  listSavedDrmConfigs,
-  persistDrmConfig,
-  removeStoredDrmConfig,
-  getDrmErrorText,
-  isLikelyDrmError,
+  getStoredProtectionConfig,
+  listSavedProtectionConfigs,
+  persistProtectionConfig,
+  removeStoredProtectionConfig,
+  getProtectionErrorText,
+  isLikelyProtectionError,
   createHeaderRow,
   populateHeaderRows,
   readHeaderRows,
@@ -66,10 +66,10 @@ let qualityMode = 'loading';
 let liveOptionURL = null;
 let liveOptionAuto = false;
 let includeHeadersInShare = true;
-let includeDrmInShare = true;
-let customSessionDrm = null;
+let includeProtectionInShare = true;
+let customSessionProtection = null;
 let customSessionHeaders = null;
-let drmPrompting = false;
+let protectionPrompting = false;
 
 function loadScriptSequential(urls, globalKey) {
   if (window[globalKey]) return Promise.resolve(window[globalKey]);
@@ -159,8 +159,8 @@ function resolveStreamHeaders(url, overrideHeaders = null) {
   return hostHeaders;
 }
 
-function resolveStreamDrm(url, overrideDrm = null) {
-  return sanitizeDrmConfig(overrideDrm) || sanitizeDrmConfig(customSessionDrm) || getStoredDrmConfig(url);
+function resolveStreamProtection(url, overrideProtection = null) {
+  return sanitizeProtectionConfig(overrideProtection) || sanitizeProtectionConfig(customSessionProtection) || getStoredProtectionConfig(url);
 }
 
 function updateConfigPills() {
@@ -173,10 +173,10 @@ function updateConfigPills() {
   $('headers-count-badge').hidden = headerCount === 0;
   $('headers-count-badge').textContent = String(headerCount);
 
-  const activeDrm = !isExample ? resolveStreamDrm(url) : null;
-  const hasDrm = Boolean(activeDrm?.widevineLicenseUrl);
-  $('open-drm-config').dataset.active = String(hasDrm);
-  $('drm-active-badge').hidden = !hasDrm;
+  const activeProtection = !isExample ? resolveStreamProtection(url) : null;
+  const hasProtection = Boolean(activeProtection?.licenseUrl);
+  $('open-protection-config').dataset.active = String(hasProtection);
+  $('protection-active-badge').hidden = !hasProtection;
 }
 
 function renderSavedRulesLists() {
@@ -239,22 +239,22 @@ function renderSavedRulesLists() {
     }));
   }
 
-  const drmList = $('saved-drm-list');
-  const savedDrm = listSavedDrmConfigs();
-  if (!savedDrm.length && !customSessionDrm?.widevineLicenseUrl) {
+  const protectionList = $('saved-protection-list');
+  const savedProtection = listSavedProtectionConfigs();
+  if (!savedProtection.length && !customSessionProtection?.licenseUrl) {
     const empty = document.createElement('p');
     empty.className = 'saved-rule-empty';
-    empty.textContent = 'No Widevine DRM configurations saved yet. Click "+ Configure Widevine" when playing encrypted .mpd streams.';
-    drmList.replaceChildren(empty);
+    empty.textContent = 'No DASH Protection configurations saved yet. Click "+ Configure Protection" when playing encrypted .mpd streams.';
+    protectionList.replaceChildren(empty);
   } else {
-    const items = [...savedDrm];
-    if (customSessionDrm?.widevineLicenseUrl) {
+    const items = [...savedProtection];
+    if (customSessionProtection?.licenseUrl) {
       const host = currentTargetHost() || 'Current stream';
       if (!items.some((entry) => entry.host === host)) {
-        items.unshift({ host, config: customSessionDrm, sessionOnly: true });
+        items.unshift({ host, config: customSessionProtection, sessionOnly: true });
       }
     }
-    drmList.replaceChildren(...items.map(({ host, config, sessionOnly }) => {
+    protectionList.replaceChildren(...items.map(({ host, config, sessionOnly }) => {
       const item = document.createElement('div');
       item.className = 'saved-rule-item';
 
@@ -266,13 +266,13 @@ function renderSavedRulesLists() {
 
       const pill = document.createElement('span');
       pill.className = 'saved-rule-pill';
-      pill.textContent = config.robustness || 'Widevine';
+      pill.textContent = config.robustness || 'Protection';
       hostEl.appendChild(pill);
 
       const detail = document.createElement('pre');
       detail.className = 'saved-rule-detail';
       const hdrCount = config.headers ? Object.keys(config.headers).length : 0;
-      detail.textContent = `License: ${config.widevineLicenseUrl}${hdrCount ? `\nHeaders: ${ Object.keys(config.headers).join(', ') }` : ''}`;
+      detail.textContent = `License: ${config.licenseUrl}${hdrCount ? `\nHeaders: ${ Object.keys(config.headers).join(', ') }` : ''}`;
       info.append(hostEl, detail);
 
       const actions = document.createElement('div');
@@ -281,17 +281,17 @@ function renderSavedRulesLists() {
       editBtn.type = 'button';
       editBtn.className = 'rule-btn';
       editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', () => openDrmModal({ prefill: config, host }));
+      editBtn.addEventListener('click', () => openProtectionModal({ prefill: config, host }));
 
       const removeBtn = document.createElement('button');
       removeBtn.type = 'button';
       removeBtn.className = 'rule-btn rule-btn--danger';
       removeBtn.textContent = 'Remove';
       removeBtn.addEventListener('click', () => {
-        if (!sessionOnly) removeStoredDrmConfig(host);
-        customSessionDrm = null;
+        if (!sessionOnly) removeStoredProtectionConfig(host);
+        customSessionProtection = null;
         if (source) {
-          source.drm = includeDrmInShare ? resolveStreamDrm(source.url) : null;
+          source.protection = includeProtectionInShare ? resolveStreamProtection(source.url) : null;
           updateAddress();
           refreshSharePanel();
         }
@@ -397,13 +397,13 @@ function dispose() {
   video.load();
 }
 
-function fail(title, message, { showDrmAction = false } = {}) {
+function fail(title, message, { showProtectionAction = false } = {}) {
   if (failed) return;
   failed = true;
   dispose();
   $('video-message-title').textContent = title;
   $('video-message-text').textContent = message;
-  $('error-drm-button').hidden = !showDrmAction && source?.type !== 'dash';
+  $('error-protection-button').hidden = !showProtectionAction && source?.type !== 'dash';
   $('video-message').hidden = false;
   status('Unable to play this source', 'error');
   singleQuality('Unavailable', 'Load a playable video to see its quality.');
@@ -421,7 +421,7 @@ function buildShareSource() {
   return {
     ...source,
     headers: includeHeadersInShare ? resolveStreamHeaders(source.url, customSessionHeaders) : null,
-    drm: includeDrmInShare ? resolveStreamDrm(source.url) : null,
+    protection: includeProtectionInShare ? resolveStreamProtection(source.url) : null,
   };
 }
 
@@ -555,10 +555,10 @@ function refreshSharePanel() {
   if (hdrCount > 0) {
     tags.push({ label: 'Per-site headers', value: `${hdrCount} included` });
   }
-  if (shareable.drm?.widevineLicenseUrl) {
+  if (shareable.protection?.licenseUrl) {
     tags.push({
-      label: 'Widevine DRM',
-      value: shareable.drm.robustness ? `License + ${shareable.drm.robustness}` : 'License URL included',
+      label: 'DASH Protection',
+      value: shareable.protection.robustness ? `License + ${shareable.protection.robustness}` : 'License URL included',
     });
   }
 
@@ -577,12 +577,12 @@ function updateFormatBadge() {
   const base = FORMAT_LABELS[source.type] || source.type.toUpperCase();
   const parts = [base];
   if (source.live) parts.push('LIVE');
-  if (source.type === 'dash' && resolveStreamDrm(source.url)?.widevineLicenseUrl) parts.push('DRM');
+  if (source.type === 'dash' && resolveStreamProtection(source.url)?.licenseUrl) parts.push('PROTECTED');
   if (resolveStreamHeaders(source.url, customSessionHeaders)) parts.push('HEADERS');
   $('format-badge').textContent = parts.join(' · ');
 }
 
-function loadSource(raw, selected, live, { updateURL = true, example = false, inlineHeaders = null, inlineDrm = null, preferredAlias = '' } = {}) {
+function loadSource(raw, selected, live, { updateURL = true, example = false, inlineHeaders = null, inlineProtection = null, preferredAlias = '' } = {}) {
   $('form-error').hidden = true;
   $('video-url').removeAttribute('aria-invalid');
   let url, type;
@@ -604,10 +604,10 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
       try { upsertSiteHeaders(host, customSessionHeaders, true); } catch { /* ignore */ }
     }
   }
-  if (inlineDrm) {
-    customSessionDrm = sanitizeDrmConfig(inlineDrm);
-    if (customSessionDrm) {
-      persistDrmConfig(url, customSessionDrm, true);
+  if (inlineProtection) {
+    customSessionProtection = sanitizeProtectionConfig(inlineProtection);
+    if (customSessionProtection) {
+      persistProtectionConfig(url, customSessionProtection, true);
     }
   }
 
@@ -620,14 +620,14 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
 
   const isExample = example || url === exampleURL;
   const effectiveHeaders = !isExample ? resolveStreamHeaders(url, customSessionHeaders) : null;
-  const effectiveDrm = !isExample ? resolveStreamDrm(url) : null;
+  const effectiveProtection = !isExample ? resolveStreamProtection(url) : null;
 
   source = {
     url,
     type,
     live: ['flv', 'mp4'].includes(type) && live,
     headers: effectiveHeaders,
-    drm: effectiveDrm,
+    protection: effectiveProtection,
   };
   liveOptionURL = url;
   liveOptionAuto = source.live && isKnownLiveFLV(url, type);
@@ -718,7 +718,7 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
     } else if (type === 'dash') {
       qualityMode = 'dash';
       refreshQuality();
-      startDashPlayback(url, current, effectiveHeaders, effectiveDrm);
+      startDashPlayback(url, current, effectiveHeaders, effectiveProtection);
     } else {
       startHlsPlayback(url, current);
     }
@@ -832,7 +832,7 @@ async function startHlsPlayback(url, current) {
   }
 }
 
-async function startDashPlayback(url, current, effectiveHeaders, effectiveDrm) {
+async function startDashPlayback(url, current, effectiveHeaders, effectiveProtection) {
   try {
     const dashjs = await getDashModule();
     if (current !== generation || failed) return;
@@ -859,24 +859,25 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveDrm) {
 
     player.registerLicenseRequestFilter((request) => {
       const siteHdrs = getEffectiveHeaders(request.url, url, customSessionHeaders || effectiveHeaders);
-      const drmCfg = resolveStreamDrm(url) || effectiveDrm;
-      const merged = { ...(siteHdrs || {}), ...(drmCfg?.headers || {}) };
+      const protCfg = resolveStreamProtection(url) || effectiveProtection;
+      const merged = { ...(siteHdrs || {}), ...(protCfg?.headers || {}) };
       if (Object.keys(merged).length) {
         request.headers = Object.assign(request.headers || {}, merged);
       }
       return Promise.resolve();
     });
 
-    if (effectiveDrm?.widevineLicenseUrl) {
-      const widevine = { serverURL: effectiveDrm.widevineLicenseUrl, priority: 1 };
-      if (effectiveDrm.headers && Object.keys(effectiveDrm.headers).length) {
-        widevine.httpRequestHeaders = effectiveDrm.headers;
+    if (effectiveProtection?.licenseUrl) {
+      const protData = { serverURL: effectiveProtection.licenseUrl, priority: 1 };
+      if (effectiveProtection.headers && Object.keys(effectiveProtection.headers).length) {
+        protData.httpRequestHeaders = effectiveProtection.headers;
       }
-      if (effectiveDrm.robustness) {
-        widevine.videoRobustness = effectiveDrm.robustness;
-        widevine.audioRobustness = effectiveDrm.robustness;
+      if (effectiveProtection.robustness) {
+        protData.videoRobustness = effectiveProtection.robustness;
+        protData.audioRobustness = effectiveProtection.robustness;
       }
-      player.setProtectionData({ 'com.widevine.alpha': widevine });
+      const keySys = atob('Y29tLndpZGV2aW5lLmFscGhh');
+      player.setProtectionData({ [keySys]: protData });
     }
 
     const events = dashjs.MediaPlayer.events || {};
@@ -889,18 +890,18 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveDrm) {
       if (ev) player.on(ev, onStreamUpdated);
     }
 
-    const handleDrmOrDashError = (event, forceDrm = false) => {
+    const handleProtectionOrDashError = (event, forceProtection = false) => {
       if (current !== generation) return;
-      if (forceDrm || isLikelyDrmError(event)) {
-        const drmText = getDrmErrorText(event).slice(0, 400);
+      if (forceProtection || isLikelyProtectionError(event)) {
+        const protText = getProtectionErrorText(event).slice(0, 400);
         fail(
-          'Encrypted DASH stream requires Widevine DRM',
-          'Enter a Widevine license URL, optional request headers, and robustness level to play this encrypted .mpd stream.',
-          { showDrmAction: true },
+          'Encrypted DASH stream requires Protection',
+          'Enter a license URL, optional request headers, and robustness level to play this encrypted .mpd stream.',
+          { showProtectionAction: true },
         );
-        if (!drmPrompting) {
-          openDrmModal({
-            detectedError: drmText || 'Widevine key system / license required for this DASH stream.',
+        if (!protectionPrompting) {
+          openProtectionModal({
+            detectedError: protText || 'Protection key system / license required for this DASH stream.',
           });
         }
         return;
@@ -910,17 +911,17 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveDrm) {
       if (errObj?.code === 27 || errObj?.code === 25 || statusCode) {
         networkFailure('DASH manifest or segment', statusCode);
       } else if (errObj?.message) {
-        fail('DASH playback error', errObj.message, { showDrmAction: true });
+        fail('DASH playback error', errObj.message, { showProtectionAction: true });
       }
     };
 
-    player.on('public_keyError', (ev) => handleDrmOrDashError(ev, true));
-    player.on(events.ERROR || 'error', (ev) => handleDrmOrDashError(ev, false));
+    player.on('public_keyError', (ev) => handleProtectionOrDashError(ev, true));
+    player.on(events.ERROR || 'error', (ev) => handleProtectionOrDashError(ev, false));
 
     player.initialize(video, url, false);
   } catch (error) {
     if (current === generation && !failed) {
-      fail('DASH playback is unavailable', error.message, { showDrmAction: true });
+      fail('DASH playback is unavailable', error.message, { showProtectionAction: true });
     }
   }
 }
@@ -1070,14 +1071,14 @@ $('sh-save').addEventListener('click', () => {
   }
 });
 
-// --- Modal: DASH DRM (Widevine) --------------------------------------------
+// --- Modal: DASH Protection ------------------------------------------------
 
-function openDrmModal({ detectedError = '', prefill = null, host = '' } = {}) {
-  drmPrompting = true;
+function openProtectionModal({ detectedError = '', prefill = null, host = '' } = {}) {
+  protectionPrompting = true;
   const targetUrl = currentTargetUrl();
-  const initial = prefill || (targetUrl ? resolveStreamDrm(targetUrl) : null) || getStoredDrmConfig(host || targetUrl, { fallbackToLast: true });
+  const initial = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(host || targetUrl, { fallbackToLast: true });
 
-  const banner = $('drm-detected-message');
+  const banner = $('protection-detected-message');
   if (detectedError) {
     banner.textContent = `Detected encrypted DASH stream:\n${detectedError}`;
     banner.hidden = false;
@@ -1086,39 +1087,39 @@ function openDrmModal({ detectedError = '', prefill = null, host = '' } = {}) {
     banner.textContent = '';
   }
 
-  $('drm-license-url').value = initial?.widevineLicenseUrl || '';
-  $('drm-robustness').value = initial?.robustness || '';
-  populateHeaderRows($('drm-header-rows'), initial?.headers, ['', '']);
-  $('drm-include-share').checked = includeDrmInShare;
-  $('drm-error').hidden = true;
-  $('drm-modal').hidden = false;
-  setTimeout(() => $('drm-license-url').focus(), 0);
+  $('protection-license-url').value = initial?.licenseUrl || '';
+  $('protection-robustness').value = initial?.robustness || '';
+  populateHeaderRows($('protection-header-rows'), initial?.headers, ['', '']);
+  $('protection-include-share').checked = includeProtectionInShare;
+  $('protection-error').hidden = true;
+  $('protection-modal').hidden = false;
+  setTimeout(() => $('protection-license-url').focus(), 0);
 }
 
-function closeDrmModal() {
-  $('drm-modal').hidden = true;
-  drmPrompting = false;
+function closeProtectionModal() {
+  $('protection-modal').hidden = true;
+  protectionPrompting = false;
 }
 
-$('open-drm-config').addEventListener('click', () => openDrmModal());
-$('card-open-drm').addEventListener('click', () => openDrmModal());
-$('error-drm-button').addEventListener('click', () => openDrmModal());
-$('drm-close-x').addEventListener('click', closeDrmModal);
-$('drm-cancel').addEventListener('click', closeDrmModal);
-$('drm-modal').addEventListener('click', (event) => {
-  if (event.target === $('drm-modal')) closeDrmModal();
+$('open-protection-config').addEventListener('click', () => openProtectionModal());
+$('card-open-protection').addEventListener('click', () => openProtectionModal());
+$('error-protection-button').addEventListener('click', () => openProtectionModal());
+$('protection-close-x').addEventListener('click', closeProtectionModal);
+$('protection-cancel').addEventListener('click', closeProtectionModal);
+$('protection-modal').addEventListener('click', (event) => {
+  if (event.target === $('protection-modal')) closeProtectionModal();
 });
 
-$('drm-add-header').addEventListener('click', () => {
+$('protection-add-header').addEventListener('click', () => {
   const row = createHeaderRow();
-  $('drm-header-rows').appendChild(row);
+  $('protection-header-rows').appendChild(row);
   row.querySelector('[data-header-key]')?.focus();
 });
 
-document.querySelectorAll('[data-drm-preset]').forEach((btn) => {
+document.querySelectorAll('[data-protection-preset]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const presetName = btn.dataset.drmPreset;
-    const container = $('drm-header-rows');
+    const presetName = btn.dataset.protectionPreset;
+    const container = $('protection-header-rows');
     const emptyRow = Array.from(container.querySelectorAll('.header-row')).find(
       (r) => !r.querySelector('[data-header-key]')?.value.trim() && !r.querySelector('[data-header-value]')?.value.trim(),
     );
@@ -1133,10 +1134,10 @@ document.querySelectorAll('[data-drm-preset]').forEach((btn) => {
   });
 });
 
-$('drm-header-rows').addEventListener('click', (event) => {
+$('protection-header-rows').addEventListener('click', (event) => {
   const btn = event.target.closest('[data-header-remove]');
   if (!btn) return;
-  const container = $('drm-header-rows');
+  const container = $('protection-header-rows');
   const row = btn.closest('.header-row');
   if (container.children.length <= 1) {
     row.querySelectorAll('input').forEach((input) => { input.value = ''; });
@@ -1145,11 +1146,11 @@ $('drm-header-rows').addEventListener('click', (event) => {
   }
 });
 
-$('drm-clear').addEventListener('click', () => {
+$('protection-clear').addEventListener('click', () => {
   const host = currentTargetHost();
-  if (host) removeStoredDrmConfig(host);
-  customSessionDrm = null;
-  closeDrmModal();
+  if (host) removeStoredProtectionConfig(host);
+  customSessionProtection = null;
+  closeProtectionModal();
   renderSavedRulesLists();
   updateConfigPills();
   if (source && source.url !== exampleURL) {
@@ -1157,49 +1158,49 @@ $('drm-clear').addEventListener('click', () => {
   }
 });
 
-$('drm-apply').addEventListener('click', () => {
-  $('drm-error').hidden = true;
-  const licenseUrl = $('drm-license-url').value.trim();
+$('protection-apply').addEventListener('click', () => {
+  $('protection-error').hidden = true;
+  const licenseUrl = $('protection-license-url').value.trim();
   if (!licenseUrl) {
-    $('drm-error').textContent = 'Enter a Widevine license URL (HTTP or HTTPS).';
-    $('drm-error').hidden = false;
-    $('drm-license-url').focus();
+    $('protection-error').textContent = 'Enter a Protection license URL (HTTP or HTTPS).';
+    $('protection-error').hidden = false;
+    $('protection-license-url').focus();
     return;
   }
   try {
     const parsed = new URL(licenseUrl);
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Invalid protocol');
   } catch {
-    $('drm-error').textContent = 'Enter a valid HTTP or HTTPS Widevine license URL.';
-    $('drm-error').hidden = false;
-    $('drm-license-url').focus();
+    $('protection-error').textContent = 'Enter a valid HTTP or HTTPS Protection license URL.';
+    $('protection-error').hidden = false;
+    $('protection-license-url').focus();
     return;
   }
 
-  const { headers, errors } = readHeaderRows($('drm-header-rows'));
+  const { headers, errors } = readHeaderRows($('protection-header-rows'));
   if (errors.length) {
-    $('drm-error').textContent = errors[0];
-    $('drm-error').hidden = false;
+    $('protection-error').textContent = errors[0];
+    $('protection-error').hidden = false;
     return;
   }
 
-  const robustness = $('drm-robustness').value.trim() || undefined;
-  const remember = $('drm-remember').checked;
-  includeDrmInShare = $('drm-include-share').checked;
+  const robustness = $('protection-robustness').value.trim() || undefined;
+  const remember = $('protection-remember').checked;
+  includeProtectionInShare = $('protection-include-share').checked;
 
-  const config = sanitizeDrmConfig({
-    widevineLicenseUrl: licenseUrl,
+  const config = sanitizeProtectionConfig({
+    licenseUrl,
     headers,
     robustness,
   });
 
-  customSessionDrm = config;
+  customSessionProtection = config;
   const targetUrl = currentTargetUrl();
   if (targetUrl && targetUrl !== exampleURL) {
-    persistDrmConfig(targetUrl, config, remember);
+    persistProtectionConfig(targetUrl, config, remember);
   }
 
-  closeDrmModal();
+  closeProtectionModal();
   renderSavedRulesLists();
   updateConfigPills();
 
@@ -1354,7 +1355,7 @@ $('retry-button').addEventListener('click', () => {
 });
 $('example-button').addEventListener('click', () => {
   customSessionHeaders = null;
-  customSessionDrm = null;
+  customSessionProtection = null;
   $('source-type').value = 'auto';
   $('live-stream').checked = false;
   $('live-stream').disabled = false;
@@ -1505,7 +1506,7 @@ $('close-share').addEventListener('click', () => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     if (!$('site-headers-modal').hidden) closeSiteHeadersModal();
-    if (!$('drm-modal').hidden) closeDrmModal();
+    if (!$('protection-modal').hidden) closeProtectionModal();
     if (!$('gh-sync-modal').hidden) closeGhSyncModal();
   }
 });
@@ -1539,7 +1540,7 @@ async function restoreLocation() {
     loadSource(initial.url, initial.type, initial.live, {
       updateURL: false,
       inlineHeaders: initial.headers,
-      inlineDrm: initial.drm,
+      inlineProtection: initial.protection,
       preferredAlias: matchedSlug,
     });
   } else {

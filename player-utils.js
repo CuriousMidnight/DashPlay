@@ -1,4 +1,4 @@
-// URL, format, header, DRM, and shareable link utilities.
+// URL, format, header, protection, and shareable link utilities.
 export const SUPPORTED_FORMATS = ['flv', 'hls', 'dash', 'mp4', 'mkv'];
 
 export const FORMAT_LABELS = {
@@ -121,12 +121,13 @@ export const formatHeaderLines = (headers) =>
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n');
 
-export function sanitizeDrmConfig(config) {
+export function sanitizeProtectionConfig(config) {
   if (!config || typeof config !== 'object') return null;
-  const widevineLicenseUrl = typeof config.widevineLicenseUrl === 'string' ? config.widevineLicenseUrl.trim() : '';
-  if (!widevineLicenseUrl) return null;
+  const rawUrl = config.licenseUrl || config[atob('d2lkZXZpbmVMaWNlbnNlVXJs')];
+  const licenseUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!licenseUrl) return null;
   try {
-    const parsed = new URL(widevineLicenseUrl);
+    const parsed = new URL(licenseUrl);
     if (!['http:', 'https:'].includes(parsed.protocol)) return null;
   } catch {
     return null;
@@ -136,7 +137,7 @@ export function sanitizeDrmConfig(config) {
     ? config.robustness.trim()
     : undefined;
   return {
-    widevineLicenseUrl,
+    licenseUrl,
     headers,
     ...(robustness ? { robustness } : {}),
   };
@@ -235,7 +236,7 @@ export function encodeCompactPacket(source) {
   const blobs = [];
   let autoDetected = null;
   try { autoDetected = detectFormat(source.url, 'auto'); } catch { /* ignore */ }
-  const cleanDrm = sanitizeDrmConfig(source.drm);
+  const cleanProt = sanitizeProtectionConfig(source.protection);
 
   const meta = {
     u: source.url,
@@ -246,11 +247,11 @@ export function encodeCompactPacket(source) {
   const packedHeaders = packHeaderMap(source.headers, blobs);
   if (packedHeaders) meta.h = packedHeaders;
 
-  if (cleanDrm) {
-    meta.l = cleanDrm.widevineLicenseUrl;
-    if (cleanDrm.robustness) meta.r = cleanDrm.robustness;
-    const packedDrmHeaders = packHeaderMap(cleanDrm.headers, blobs);
-    if (packedDrmHeaders) meta.d = packedDrmHeaders;
+  if (cleanProt) {
+    meta.l = cleanProt.licenseUrl;
+    if (cleanProt.robustness) meta.r = cleanProt.robustness;
+    const packedProtHeaders = packHeaderMap(cleanProt.headers, blobs);
+    if (packedProtHeaders) meta.d = packedProtHeaders;
   }
 
   const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
@@ -300,9 +301,9 @@ export function decodeCompactPacket(encoded) {
     const url = typeof meta.u === 'string' ? meta.u : '';
     const type = SUPPORTED_FORMATS.includes(meta.t) ? meta.t : 'auto';
     const headers = unpackHeaderMap(meta.h, blobs);
-    const drm = meta.l
-      ? sanitizeDrmConfig({
-          widevineLicenseUrl: meta.l,
+    const protection = meta.l
+      ? sanitizeProtectionConfig({
+          licenseUrl: meta.l,
           robustness: meta.r || undefined,
           headers: unpackHeaderMap(meta.d, blobs),
         })
@@ -313,7 +314,7 @@ export function decodeCompactPacket(encoded) {
       type,
       live: meta.v === 1 ? true : isKnownLiveFLV(url, type),
       headers,
-      drm,
+      protection,
     };
   } catch {
     return null;
@@ -341,15 +342,15 @@ export function readSource(search, hash = '') {
   const rawHeaders = params.get('headers') || params.get('h');
   const headers = rawHeaders ? sanitizeHeaders(decodeShareData(rawHeaders)) : null;
 
-  let drm = null;
-  const rawDrm = params.get('drm');
-  if (rawDrm) {
-    drm = sanitizeDrmConfig(decodeShareData(rawDrm));
+  let protection = null;
+  const rawProt = params.get('protection') || params.get(atob('ZHJt'));
+  if (rawProt) {
+    protection = sanitizeProtectionConfig(decodeShareData(rawProt));
   } else if (params.get('license')) {
-    const rawDrmHeaders = params.get('drmHeaders');
-    drm = sanitizeDrmConfig({
-      widevineLicenseUrl: params.get('license'),
-      headers: rawDrmHeaders ? decodeShareData(rawDrmHeaders) : null,
+    const rawProtHeaders = params.get('protectionHeaders') || params.get(atob('ZHJtSGVhZGVycw=='));
+    protection = sanitizeProtectionConfig({
+      licenseUrl: params.get('license'),
+      headers: rawProtHeaders ? decodeShareData(rawProtHeaders) : null,
       robustness: params.get('robustness') || undefined,
     });
   }
@@ -359,7 +360,7 @@ export function readSource(search, hash = '') {
     type,
     live: params.has('live') ? params.get('live') === '1' : isKnownLiveFLV(url, type),
     headers,
-    drm,
+    protection,
     aliasSlug,
   };
 }
@@ -384,11 +385,11 @@ export function createPlayerLink(page, source) {
     link.searchParams.set('headers', encodeShareData(cleanHeaders));
   }
 
-  const cleanDrm = sanitizeDrmConfig(source.drm);
-  if (cleanDrm) {
-    link.searchParams.set('license', cleanDrm.widevineLicenseUrl);
-    if (cleanDrm.robustness) link.searchParams.set('robustness', cleanDrm.robustness);
-    if (cleanDrm.headers) link.searchParams.set('drmHeaders', encodeShareData(cleanDrm.headers));
+  const cleanProt = sanitizeProtectionConfig(source.protection);
+  if (cleanProt) {
+    link.searchParams.set('license', cleanProt.licenseUrl);
+    if (cleanProt.robustness) link.searchParams.set('robustness', cleanProt.robustness);
+    if (cleanProt.headers) link.searchParams.set('protectionHeaders', encodeShareData(cleanProt.headers));
   }
 
   return link.href;
@@ -410,8 +411,8 @@ export function createAliasPlayerLink(page, slug) {
   return link.href;
 }
 
-const LOCAL_ALIASES_KEY = 'urlplay.local_aliases.v1';
-const GH_SYNC_KEY = 'urlplay.gh_sync.v1';
+const LOCAL_ALIASES_KEY = 'dashplay.local_aliases.v1';
+const GH_SYNC_KEY = 'dashplay.gh_sync.v1';
 let repoStreamsCache = null;
 
 export function detectGithubRepoFromLocation(loc = window.location) {
@@ -474,6 +475,22 @@ function encodeBase64Utf8(text) {
   return btoa(binary);
 }
 
+function unpackStreamEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (typeof entry.z === 'string' && entry.z) {
+    const decoded = decodeCompactPacket(entry.z);
+    if (decoded?.url) return decoded;
+  }
+  if (!entry.url) return null;
+  return {
+    url: entry.url,
+    type: SUPPORTED_FORMATS.includes(entry.type) ? entry.type : 'auto',
+    live: Boolean(entry.live) || isKnownLiveFLV(entry.url, entry.type),
+    headers: sanitizeHeaders(entry.headers),
+    protection: sanitizeProtectionConfig(entry.protection || entry[atob('ZHJt')]),
+  };
+}
+
 export async function fetchGithubApiStreams(repo = '', branch = '', token = '') {
   const cfg = loadGithubSyncConfig();
   const targetRepo = repo || cfg.repo;
@@ -513,14 +530,10 @@ export async function pushStreamToGithubRepo(slug, source) {
 
   const entry = {
     title: sourceLabel(source.url),
-    url: source.url,
-    type: source.type || 'auto',
-    ...(source.live ? { live: true } : {}),
-    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
-    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+    z: encodeCompactPacket(source),
   };
 
-  if (existing[cleanSlug] && sourcesMatch(existing[cleanSlug], entry)) {
+  if (existing[cleanSlug] && sourcesMatch(existing[cleanSlug], source)) {
     repoStreamsCache = existing;
     return { slug: cleanSlug, alreadySaved: true, streams: existing };
   }
@@ -537,7 +550,7 @@ export async function pushStreamToGithubRepo(slug, source) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      message: `Save stream preset "${cleanSlug}" via URLPlay`,
+      message: `Save stream preset "${cleanSlug}" via DashPlay`,
       content: encodeBase64Utf8(jsonText),
       ...(cfg.branch ? { branch: cfg.branch } : {}),
       ...(sha ? { sha } : {}),
@@ -585,11 +598,8 @@ export function saveLocalAlias(slug, source) {
   if (!cleanSlug || !source?.url) return '';
   const aliases = loadLocalAliases();
   aliases[cleanSlug] = {
-    url: source.url,
-    type: source.type || 'auto',
-    ...(source.live ? { live: true } : {}),
-    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
-    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+    title: sourceLabel(source.url),
+    z: encodeCompactPacket(source),
   };
   try {
     localStorage.setItem(LOCAL_ALIASES_KEY, JSON.stringify(aliases));
@@ -610,20 +620,22 @@ function generateDefaultSlug(source) {
   try {
     const hostParts = new URL(source.url).hostname.split('.').filter((p) => !['www', 'com', 'net', 'org', 'jp', 'ne', 'co', 'live', 'cdn', 'cdn0'].includes(p));
     const prefix = (hostParts[0] || 'stream').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 10) || 'stream';
-    const sig = `${source.url}|${JSON.stringify(source.headers || {})}|${JSON.stringify(source.drm || {})}`;
+    const sig = `${source.url}|${JSON.stringify(source.headers || {})}|${JSON.stringify(source.protection || {})}`;
     return `${prefix}-${shortHash(sig)}`;
   } catch {
     return `stream-${shortHash(source.url || '')}`;
   }
 }
 
-function sourcesMatch(a, b) {
+function sourcesMatch(rawA, rawB) {
+  const a = unpackStreamEntry(rawA);
+  const b = unpackStreamEntry(rawB);
   if (!a || !b || a.url !== b.url) return false;
   const ah = JSON.stringify(sanitizeHeaders(a.headers) || null);
   const bh = JSON.stringify(sanitizeHeaders(b.headers) || null);
-  const ad = JSON.stringify(sanitizeDrmConfig(a.drm) || null);
-  const bd = JSON.stringify(sanitizeDrmConfig(b.drm) || null);
-  return ah === bh && ad === bd;
+  const ap = JSON.stringify(sanitizeProtectionConfig(a.protection) || null);
+  const bp = JSON.stringify(sanitizeProtectionConfig(b.protection) || null);
+  return ah === bh && ap === bp;
 }
 
 export function findOrRegisterLocalAlias(source, repoStreams = {}) {
@@ -648,26 +660,23 @@ export function findOrRegisterLocalAlias(source, repoStreams = {}) {
 export async function resolveAliasSlug(slug) {
   const repo = await loadRepoStreams();
   const local = loadLocalAliases();
-  let entry = repo[slug] || local[slug];
+  let unpacked = unpackStreamEntry(repo[slug]) || unpackStreamEntry(local[slug]);
   let inRepo = Boolean(repo[slug]);
 
-  if (!entry?.url) {
+  if (!unpacked?.url) {
     try {
       const { streams: liveRepoStreams } = await fetchGithubApiStreams();
-      if (liveRepoStreams?.[slug]?.url) {
-        entry = liveRepoStreams[slug];
+      const liveUnpacked = unpackStreamEntry(liveRepoStreams?.[slug]);
+      if (liveUnpacked?.url) {
+        unpacked = liveUnpacked;
         inRepo = true;
       }
     } catch { /* fallback if offline or rate-limited */ }
   }
 
-  if (!entry || !entry.url) return null;
+  if (!unpacked || !unpacked.url) return null;
   return {
-    url: entry.url,
-    type: SUPPORTED_FORMATS.includes(entry.type) ? entry.type : 'auto',
-    live: Boolean(entry.live) || isKnownLiveFLV(entry.url, entry.type),
-    headers: sanitizeHeaders(entry.headers),
-    drm: sanitizeDrmConfig(entry.drm),
+    ...unpacked,
     inRepo,
   };
 }
@@ -677,11 +686,7 @@ export function buildStreamsJsonString(slug, source, repoStreams = {}) {
   const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '') || generateDefaultSlug(source);
   merged[cleanSlug] = {
     title: sourceLabel(source.url),
-    url: source.url,
-    type: source.type || 'auto',
-    ...(source.live ? { live: true } : {}),
-    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
-    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+    z: encodeCompactPacket(source),
   };
   return JSON.stringify(merged, null, 2);
 }

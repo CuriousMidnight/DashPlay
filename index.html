@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Open any .m3u8, .mpd, .flv, .mp4, or .mkv stream in your browser with Per-site request headers, DASH Widevine DRM, and instant shareable links.">
+  <meta name="description" content="Open any .m3u8, .mpd, .flv, .mp4, or .mkv stream in your browser with Per-site request headers, DASH Protection, and instant shareable links.">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f7f7f2">
-  <title>URLplay — M3U8, MPD (DASH DRM), FLV, MP4 & MKV Web Player</title>
+  <title>DashPlay — M3U8, MPD (DASH Protection), FLV, MP4 &amp; MKV Web Player</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d8542d'/%3E%3Cpath d='m11 8 13 8-13 8Z' fill='%23fff'/%3E%3C/svg%3E" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
   <script defer src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.js" onerror="this.onerror=null;this.src='vendor/mpegts-1.8.0.js'"></script>
@@ -16,9 +16,9 @@
 <body>
   <a class="skip-link" href="#main">Skip to player</a>
   <header class="site-header wrap">
-    <a class="brand" href="./" aria-label="URLplay home"><span class="brand-mark" aria-hidden="true">▶</span> URLplay<span class="brand-dot">.</span></a>
+    <a class="brand" href="./" aria-label="DashPlay home"><span class="brand-mark" aria-hidden="true">▶</span> DashPlay<span class="brand-dot">.</span></a>
     <nav aria-label="Main navigation">
-      <a href="#stream-features">Headers &amp; DRM <span aria-hidden="true">↗</span></a>
+      <a href="#stream-features">Headers &amp; Protection <span aria-hidden="true">↗</span></a>
       <a href="#how-it-works">How it works <span aria-hidden="true">↗</span></a>
       <span class="browser-label"><span class="dot"></span> All in your browser</span>
     </nav>
@@ -26,7 +26,7 @@
 
   <main id="main" class="wrap">
     <section class="intro" aria-label="Introduction">
-      <p>Open any <strong>.m3u8</strong>, <strong>.mpd</strong>, <strong>.flv</strong>, <strong>.mp4</strong>, or <strong>.mkv</strong> stream with per-site request headers, DASH Widevine DRM, and shareable links for your friends.</p>
+      <p>Open any <strong>.m3u8</strong>, <strong>.mpd</strong>, <strong>.flv</strong>, <strong>.mp4</strong>, or <strong>.mkv</strong> stream with per-site request headers, DASH Protection, and shareable links for your friends.</p>
     </section>
 
     <section class="player-workspace" aria-label="Video player">
@@ -60,10 +60,10 @@
               <span>Per-site headers</span>
               <span id="headers-count-badge" class="pill-badge" hidden>0</span>
             </button>
-            <button id="open-drm-config" class="config-pill-button" type="button" title="Enter Widevine license URL, request headers and robustness level">
+            <button id="open-protection-config" class="config-pill-button" type="button" title="Enter license URL, request headers and robustness level">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-              <span>DASH DRM (Widevine)</span>
-              <span id="drm-active-badge" class="pill-badge" hidden>ON</span>
+              <span>DASH Protection</span>
+              <span id="protection-active-badge" class="pill-badge" hidden>ON</span>
             </button>
           </div>
         </div>
@@ -80,7 +80,7 @@
           <div class="error-actions">
             <button id="retry-button" class="secondary-button" type="button">Try again <span aria-hidden="true">↻</span></button>
             <button id="error-headers-button" class="secondary-button secondary-button--outline" type="button">Per-site headers</button>
-            <button id="error-drm-button" class="secondary-button secondary-button--outline" type="button">DASH DRM (Widevine)</button>
+            <button id="error-protection-button" class="secondary-button secondary-button--outline" type="button">DASH Protection</button>
           </div>
         </div>
         <div id="player-controls" class="player-controls" role="group" aria-label="Playback controls" hidden>
@@ -120,7 +120,7 @@
         <div class="share-fallback-row">
           <label for="share-url">Shareable link (100% local):</label>
           <div class="share-mode-group" role="group" aria-label="Link style">
-            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="true" title="Short link using local storage & streams.json in your GitHub Pages repo (?s=...)">Short (?s=…)</button>
+            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="true" title="Short link using local storage &amp; streams.json in your GitHub Pages repo (?s=...)">Admin Only</button>
             <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="false" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
             <button id="share-mode-full" class="preset-chip" type="button" data-share-mode="full" aria-pressed="false" title="Readable URL with all query parameters (?url=...)">Standard (?url=…)</button>
           </div>
@@ -159,16 +159,16 @@
         <div id="saved-site-headers-list" class="saved-rules-list" aria-live="polite"></div>
       </article>
 
-      <article class="feature-card" id="dash-drm-card">
+      <article class="feature-card" id="dash-protection-card">
         <div class="feature-card-header">
           <div>
-            <span class="feature-tag">ENCRYPTED .MPD STREAMS</span>
-            <h2>DASH DRM</h2>
-            <p>Enter a license URL, request headers and robustness level when an encrypted stream needs it. Configurations can be remembered per host and shared via link.</p>
+            <span class="feature-tag">PROTECTED .MPD STREAMS</span>
+            <h2>DASH Protection</h2>
+            <p>Enter a license URL, request headers and robustness level when a protected stream needs it. Configurations can be remembered per host and shared via link.</p>
           </div>
-          <button id="card-open-drm" class="secondary-action-button" type="button">+ Configure Widevine</button>
+          <button id="card-open-protection" class="secondary-action-button" type="button">+ Configure Protection</button>
         </div>
-        <div id="saved-drm-list" class="saved-rules-list" aria-live="polite"></div>
+        <div id="saved-protection-list" class="saved-rules-list" aria-live="polite"></div>
       </article>
     </section>
 
@@ -182,13 +182,13 @@
         </article>
         <article>
           <span class="step-number">02</span>
-          <h3>Add headers or license DRM</h3>
-          <p>Save per-site request headers for streams that return 403 errors, or enter a license URL, headers, and robustness level for encrypted DASH streams.</p>
+          <h3>Add headers or Protection</h3>
+          <p>Save per-site request headers for streams that return 403 errors, or enter a license URL, headers, and robustness level for protected DASH streams.</p>
         </article>
         <article>
           <span class="step-number">03</span>
           <h3>Share with friends</h3>
-          <p>Click <strong>Copy shareable link</strong>. Your stream URL, format, per-site headers, and Widevine DRM settings are encoded into a single link ready to open.</p>
+          <p>Click <strong>Copy shareable link</strong>. Your stream URL, format, per-site headers, and Protection settings are encoded into a single link ready to open.</p>
         </article>
       </div>
     </section>
@@ -197,7 +197,7 @@
       <span class="info-icon" aria-hidden="true">i</span>
       <div>
         <h2>Good to know</h2>
-        <p>Use HTTPS links when hosted on GitHub Pages. External video hosts must allow cross-origin playback (CORS) and any custom request headers you configure. Widevine DRM requires a Chromium-based or EME-compatible browser under HTTPS or localhost.</p>
+        <p>Use HTTPS links when hosted on GitHub Pages. External video hosts must allow cross-origin playback (CORS) and any custom request headers you configure. Protected streams require an EME-compatible browser under HTTPS or localhost.</p>
       </div>
       <div class="supported-formats">
         <span>.m3u8</span>
@@ -210,7 +210,7 @@
   </main>
 
   <footer class="site-footer wrap">
-    <a class="brand footer-brand" href="./">URLplay<span class="brand-dot">.</span></a>
+    <a class="brand footer-brand" href="./">DashPlay<span class="brand-dot">.</span></a>
     <p>A client-side M3U8, MPD, FLV, MP4 &amp; MKV player for GitHub Pages.</p>
     <span><a href="#main">Back to top ↑</a></span>
   </footer>
@@ -263,40 +263,40 @@
     </div>
   </div>
 
-  <!-- DASH DRM (Widevine) Modal -->
-  <div id="drm-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="drm-modal-title" hidden>
+  <!-- DASH Protection Modal -->
+  <div id="protection-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="protection-modal-title" hidden>
     <div class="modal-panel">
       <div class="modal-header">
         <div>
-          <h2 id="drm-modal-title" class="modal-title">DASH DRM (Widevine)</h2>
-          <p class="modal-subtitle">Enter a license URL, request headers and robustness level when an encrypted stream needs it.</p>
+          <h2 id="protection-modal-title" class="modal-title">DASH Protection</h2>
+          <p class="modal-subtitle">Enter a license URL, request headers and robustness level when a protected stream needs it.</p>
         </div>
-        <button id="drm-close-x" class="modal-close-x" type="button" aria-label="Close dialog">✕</button>
+        <button id="protection-close-x" class="modal-close-x" type="button" aria-label="Close dialog">✕</button>
       </div>
 
       <div class="modal-body">
-        <p id="drm-detected-message" class="drm-detected-banner" hidden></p>
+        <p id="protection-detected-message" class="protection-detected-banner" hidden></p>
 
         <label class="modal-field">
-          <span class="field-label">Widevine License URL</span>
-          <input id="drm-license-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://license.example.com/widevine">
+          <span class="field-label">Protection License URL</span>
+          <input id="protection-license-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://license.example.com/license">
         </label>
 
         <div class="modal-field">
           <div class="field-label-row">
             <span class="field-label">License Request Headers (optional)</span>
             <div class="preset-chips">
-              <button type="button" class="chip-button" data-drm-preset="Authorization">+ Authorization</button>
-              <button type="button" class="chip-button" data-drm-preset="X-AxDRM-Message">+ X-AxDRM-Message</button>
+              <button type="button" class="chip-button" data-protection-preset="Authorization">+ Authorization</button>
+              <button type="button" class="chip-button" data-protection-preset="X-Custom-Token">+ X-Custom-Token</button>
             </div>
           </div>
-          <div id="drm-header-rows" class="header-rows-container"></div>
-          <button id="drm-add-header" type="button" class="secondary-action-button">+ Add header</button>
+          <div id="protection-header-rows" class="header-rows-container"></div>
+          <button id="protection-add-header" type="button" class="secondary-action-button">+ Add header</button>
         </div>
 
         <label class="modal-field">
           <span class="field-label">Robustness Level (optional)</span>
-          <input id="drm-robustness" type="text" list="robustness-options" spellcheck="false" autocomplete="off" placeholder="SW_SECURE_DECODE">
+          <input id="protection-robustness" type="text" list="robustness-options" spellcheck="false" autocomplete="off" placeholder="SW_SECURE_DECODE">
           <datalist id="robustness-options">
             <option value="SW_SECURE_DECODE"></option>
             <option value="SW_SECURE_CRYPTO"></option>
@@ -307,23 +307,23 @@
         </label>
 
         <label class="modal-checkbox">
-          <input id="drm-remember" type="checkbox" checked>
+          <input id="protection-remember" type="checkbox" checked>
           <span>Remember for this stream host</span>
         </label>
 
         <label class="modal-checkbox">
-          <input id="drm-include-share" type="checkbox" checked>
-          <span>Include license DRM config when generating a shareable link</span>
+          <input id="protection-include-share" type="checkbox" checked>
+          <span>Include Protection config when generating a shareable link</span>
         </label>
 
-        <p id="drm-error" class="modal-error" role="alert" hidden></p>
+        <p id="protection-error" class="modal-error" role="alert" hidden></p>
       </div>
 
       <div class="modal-actions">
-        <button id="drm-clear" type="button" class="modal-btn modal-btn--danger">Clear DRM</button>
+        <button id="protection-clear" type="button" class="modal-btn modal-btn--danger">Clear Protection</button>
         <div class="modal-actions-right">
-          <button id="drm-cancel" type="button" class="modal-btn">Cancel</button>
-          <button id="drm-apply" type="button" class="modal-btn modal-btn--primary">Apply DRM</button>
+          <button id="protection-cancel" type="button" class="modal-btn">Cancel</button>
+          <button id="protection-apply" type="button" class="modal-btn modal-btn--primary">Apply Protection</button>
         </div>
       </div>
     </div>
@@ -336,7 +336,7 @@
         <div>
           <span class="feature-tag">100% LOCALIZED GITHUB PAGES SHORTENER</span>
           <h2 id="gh-sync-title" class="modal-title">Auto-Save to GitHub <code>streams.json</code></h2>
-          <p class="modal-subtitle">Automatically commit loaded streams into <code>streams.json</code> in your GitHub repository so short <code>?s=…</code> links work for all your friends without manual file uploads.</p>
+          <p class="modal-subtitle">Automatically commit loaded streams into <code>streams.json</code> in your GitHub repository so Admin Only (<code>?s=…</code>) links work for all your friends without manual file uploads.</p>
         </div>
         <button id="gh-sync-close-x" class="modal-close-x" type="button" aria-label="Close">✕</button>
       </div>
@@ -357,7 +357,7 @@
             <span class="field-label">GitHub Personal Access Token (stored only in your browser)</span>
             <a class="chip-button" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create Fine-Grained Token ↗</a>
           </div>
-          <input id="gh-token-input" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_... or ghp_... (Contents: Read & write)">
+          <input id="gh-token-input" type="password" spellcheck="false" autocomplete="off" placeholder="github_pat_... or ghp_... (Contents: Read &amp; write)">
           <span style="font-size:11px;color:var(--muted)">Scope needed: <strong>Repository permissions → Contents → Read and write</strong> on your player repository. Never shared in links.</span>
         </label>
 
@@ -373,7 +373,7 @@
         <button id="gh-sync-clear" type="button" class="modal-btn modal-btn--danger">Remove Token</button>
         <div class="modal-actions-right">
           <button id="gh-sync-cancel" type="button" class="modal-btn">Cancel</button>
-          <button id="gh-sync-save" type="button" class="modal-btn modal-btn--primary">Save & Sync Current Stream</button>
+          <button id="gh-sync-save" type="button" class="modal-btn modal-btn--primary">Save &amp; Sync Current Stream</button>
         </div>
       </div>
     </div>

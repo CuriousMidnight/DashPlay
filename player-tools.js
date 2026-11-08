@@ -20,7 +20,7 @@ export function screenshotFilename(url, seconds) {
   const minutes = String(Math.floor(ms / 60000) % 60).padStart(2, '0');
   const remainder = String(Math.floor(ms / 1000) % 60).padStart(2, '0');
   const millis = String(ms % 1000).padStart(3, '0');
-  return `urlplay-${name}-${hours}-${minutes}-${remainder}-${millis}.png`;
+  return `dashplay-${name}-${hours}-${minutes}-${remainder}-${millis}.png`;
 }
 
 function requireVideoFrame(video) {

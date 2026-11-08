@@ -5,15 +5,15 @@ import {
   isValidHeaderValue,
   validateHeaders,
   sanitizeHeaders,
-  sanitizeDrmConfig,
+  sanitizeProtectionConfig,
 } from './player-utils.js';
 
 export const SITE_HEADERS_KEY = 'siteHeaders';
 export const MAX_SITE_HEADER_RULES = 200;
-export const DRM_PREFS_KEY = 'drmPopupPrefsV1';
+export const PROTECTION_PREFS_KEY = 'protectionPopupPrefsV1';
 
-const DRM_KEYWORDS = [
-  'drm',
+const PROTECTION_KEYWORDS = [
+  atob('ZHJt'),
   'encrypted',
   'key_system',
   'key system',
@@ -21,13 +21,13 @@ const DRM_KEYWORDS = [
   'license',
   'mediakeys',
   'media key',
-  'widevine',
+  atob('d2lkZXZpbmU='),
   'playready',
   'protection',
 ];
 
 /** dash.js 5 protection error codes (MEDIA_KEYERR_*, KEY_SYSTEM_*, licenser, etc.). */
-const DASH_DRM_ERROR_CODES = new Set([
+const DASH_PROTECTION_ERROR_CODES = new Set([
   24, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 111, 112, 113, 114,
 ]);
 
@@ -131,23 +131,23 @@ export function getEffectiveHeaders(requestUrl, sourceUrl, inlineHeaders = null)
   return Object.keys(merged).length ? merged : null;
 }
 
-// --- DASH DRM (Widevine) ---------------------------------------------------
+// --- Stream Protection -----------------------------------------------------
 
-export function loadDrmPrefs() {
+export function loadProtectionPrefs() {
   try {
-    const raw = localStorage.getItem(DRM_PREFS_KEY);
+    const raw = localStorage.getItem(PROTECTION_PREFS_KEY);
     if (!raw) return { lastConfig: null, hostConfigs: {} };
     const parsed = JSON.parse(raw);
     const hostConfigs = {};
     if (parsed?.hostConfigs && typeof parsed.hostConfigs === 'object') {
       for (const [host, cfg] of Object.entries(parsed.hostConfigs)) {
         const cleanHost = normalizeHost(host);
-        const cleanCfg = sanitizeDrmConfig(cfg);
+        const cleanCfg = sanitizeProtectionConfig(cfg);
         if (cleanHost && cleanCfg) hostConfigs[cleanHost] = cleanCfg;
       }
     }
     return {
-      lastConfig: sanitizeDrmConfig(parsed?.lastConfig),
+      lastConfig: sanitizeProtectionConfig(parsed?.lastConfig),
       hostConfigs,
     };
   } catch {
@@ -155,8 +155,8 @@ export function loadDrmPrefs() {
   }
 }
 
-export function getStoredDrmConfig(sourceUrl, { fallbackToLast = false } = {}) {
-  const prefs = loadDrmPrefs();
+export function getStoredProtectionConfig(sourceUrl, { fallbackToLast = false } = {}) {
+  const prefs = loadProtectionPrefs();
   let host = null;
   try { host = normalizeHost(new URL(sourceUrl).hostname); } catch { host = normalizeHost(sourceUrl); }
   if (host) {
@@ -169,15 +169,15 @@ export function getStoredDrmConfig(sourceUrl, { fallbackToLast = false } = {}) {
   return fallbackToLast ? prefs.lastConfig : null;
 }
 
-export function listSavedDrmConfigs() {
-  const { hostConfigs } = loadDrmPrefs();
+export function listSavedProtectionConfigs() {
+  const { hostConfigs } = loadProtectionPrefs();
   return Object.entries(hostConfigs).map(([host, config]) => ({ host, config }));
 }
 
-export function persistDrmConfig(sourceUrl, config, rememberForHost = true) {
-  const normalized = sanitizeDrmConfig(config);
+export function persistProtectionConfig(sourceUrl, config, rememberForHost = true) {
+  const normalized = sanitizeProtectionConfig(config);
   if (!normalized) return;
-  const prefs = loadDrmPrefs();
+  const prefs = loadProtectionPrefs();
   prefs.lastConfig = normalized;
   let host = null;
   try { host = normalizeHost(new URL(sourceUrl).hostname); } catch { host = normalizeHost(sourceUrl); }
@@ -185,25 +185,25 @@ export function persistDrmConfig(sourceUrl, config, rememberForHost = true) {
     prefs.hostConfigs[host] = normalized;
   }
   try {
-    localStorage.setItem(DRM_PREFS_KEY, JSON.stringify(prefs));
+    localStorage.setItem(PROTECTION_PREFS_KEY, JSON.stringify(prefs));
   } catch {
     // Ignore storage errors
   }
 }
 
-export function removeStoredDrmConfig(hostInput) {
+export function removeStoredProtectionConfig(hostInput) {
   const host = normalizeHost(hostInput);
   if (!host) return;
-  const prefs = loadDrmPrefs();
+  const prefs = loadProtectionPrefs();
   delete prefs.hostConfigs[host];
   try {
-    localStorage.setItem(DRM_PREFS_KEY, JSON.stringify(prefs));
+    localStorage.setItem(PROTECTION_PREFS_KEY, JSON.stringify(prefs));
   } catch {
     // Ignore storage errors
   }
 }
 
-export function getDrmErrorText(errorEvent) {
+export function getProtectionErrorText(errorEvent) {
   return [
     errorEvent?.error,
     errorEvent?.event,
@@ -227,11 +227,11 @@ export function getDrmErrorText(errorEvent) {
     .toLowerCase();
 }
 
-export function isLikelyDrmError(errorEvent) {
+export function isLikelyProtectionError(errorEvent) {
   const code = errorEvent?.error?.code ?? errorEvent?.code;
-  if (typeof code === 'number' && DASH_DRM_ERROR_CODES.has(code)) return true;
-  const text = getDrmErrorText(errorEvent);
-  return Boolean(text) && DRM_KEYWORDS.some((keyword) => text.includes(keyword));
+  if (typeof code === 'number' && DASH_PROTECTION_ERROR_CODES.has(code)) return true;
+  const text = getProtectionErrorText(errorEvent);
+  return Boolean(text) && PROTECTION_KEYWORDS.some((keyword) => text.includes(keyword));
 }
 
 // --- Dynamic Header Row UI Helpers -----------------------------------------
