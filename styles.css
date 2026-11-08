@@ -123,6 +123,11 @@ video.frame-rendered{visibility:hidden}
 .preset-chip[aria-pressed=true]{background:#fff;color:#9d3516;box-shadow:0 1px 2px #00000012}
 .share-fallback input{min-width:180px;flex:1;border:1px solid #cfd5c8;background:#fff;border-radius:4px;padding:7px 10px;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--ink)}
 .share-copy-btn{padding:7px 14px;font-size:11px}
+.share-alias-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-radius:6px;background:#f1f3ec;border:1px solid #dfe4d7}
+.share-alias-row code{font:10px ui-monospace,SFMono-Regular,Consolas,monospace;color:#9d3516}
+.alias-slug-input{flex:0 0 130px!important;min-width:110px!important;padding:4px 8px!important}
+.alias-repo-status{font-size:10px;color:#5a6555;margin-right:auto}
+.alias-repo-status[data-in-repo=true]{color:#2d6a3e;font-weight:600}
 .share-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .share-tag{font-size:10px;padding:2px 8px;border-radius:10px;background:#eef1e8;border:1px solid #d6dccb;color:#4f5a4a}
 .share-tag strong{font-weight:600;color:var(--ink)}

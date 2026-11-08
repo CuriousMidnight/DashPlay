@@ -170,10 +170,172 @@ export function decodeShareData(encoded) {
   }
 }
 
-export function readSource(search) {
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(str) {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(padded);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+function tryUnwrapBase64(val) {
+  if (typeof val !== 'string' || val.length < 32 || val.length % 4 !== 0) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(val)) return null;
+  try {
+    const bin = atob(val);
+    if (btoa(bin) !== val) return null;
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function packHeaderMap(headers, blobs) {
+  const clean = sanitizeHeaders(headers);
+  if (!clean) return undefined;
+  const packed = {};
+  for (const [k, v] of Object.entries(clean)) {
+    const rawBytes = tryUnwrapBase64(v);
+    if (rawBytes) {
+      packed[k] = blobs.length;
+      blobs.push(rawBytes);
+    } else {
+      packed[k] = v;
+    }
+  }
+  return packed;
+}
+
+function unpackHeaderMap(packed, blobs) {
+  if (!packed || typeof packed !== 'object') return null;
+  const out = {};
+  for (const [k, v] of Object.entries(packed)) {
+    if (typeof v === 'number' && blobs[v]) {
+      let bin = '';
+      const bytes = blobs[v];
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      out[k] = btoa(bin);
+    } else if (typeof v === 'string') {
+      out[k] = v;
+    }
+  }
+  return sanitizeHeaders(out);
+}
+
+export function encodeCompactPacket(source) {
+  const blobs = [];
+  let autoDetected = null;
+  try { autoDetected = detectFormat(source.url, 'auto'); } catch { /* ignore */ }
+  const cleanDrm = sanitizeDrmConfig(source.drm);
+
+  const meta = {
+    u: source.url,
+    ...(source.type && source.type !== autoDetected ? { t: source.type } : {}),
+    ...(source.live && ['flv', 'mp4'].includes(source.type) ? { v: 1 } : {}),
+  };
+
+  const packedHeaders = packHeaderMap(source.headers, blobs);
+  if (packedHeaders) meta.h = packedHeaders;
+
+  if (cleanDrm) {
+    meta.l = cleanDrm.widevineLicenseUrl;
+    if (cleanDrm.robustness) meta.r = cleanDrm.robustness;
+    const packedDrmHeaders = packHeaderMap(cleanDrm.headers, blobs);
+    if (packedDrmHeaders) meta.d = packedDrmHeaders;
+  }
+
+  const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
+  let totalLen = 1 + 2 + metaBytes.length;
+  for (const b of blobs) totalLen += 2 + b.length;
+
+  const packet = new Uint8Array(totalLen);
+  let offset = 0;
+  packet[offset++] = 0; // version 0: synchronous binary-unwrapped packet
+  packet[offset++] = (metaBytes.length >> 8) & 0xff;
+  packet[offset++] = metaBytes.length & 0xff;
+  packet.set(metaBytes, offset);
+  offset += metaBytes.length;
+
+  for (const b of blobs) {
+    packet[offset++] = (b.length >> 8) & 0xff;
+    packet[offset++] = b.length & 0xff;
+    packet.set(b, offset);
+    offset += b.length;
+  }
+
+  return bytesToBase64Url(packet);
+}
+
+export function decodeCompactPacket(encoded) {
+  if (!encoded || typeof encoded !== 'string') return null;
+  try {
+    const packet = base64UrlToBytes(encoded.trim());
+    if (packet.length < 4 || packet[0] !== 0) return null;
+    let offset = 1;
+    const metaLen = (packet[offset] << 8) | packet[offset + 1];
+    offset += 2;
+    if (offset + metaLen > packet.length) return null;
+    const metaJson = new TextDecoder().decode(packet.subarray(offset, offset + metaLen));
+    offset += metaLen;
+    const meta = JSON.parse(metaJson);
+
+    const blobs = [];
+    while (offset + 2 <= packet.length) {
+      const bLen = (packet[offset] << 8) | packet[offset + 1];
+      offset += 2;
+      if (offset + bLen > packet.length) break;
+      blobs.push(packet.subarray(offset, offset + bLen));
+      offset += bLen;
+    }
+
+    const url = typeof meta.u === 'string' ? meta.u : '';
+    const type = SUPPORTED_FORMATS.includes(meta.t) ? meta.t : 'auto';
+    const headers = unpackHeaderMap(meta.h, blobs);
+    const drm = meta.l
+      ? sanitizeDrmConfig({
+          widevineLicenseUrl: meta.l,
+          robustness: meta.r || undefined,
+          headers: unpackHeaderMap(meta.d, blobs),
+        })
+      : null;
+
+    return {
+      url,
+      type,
+      live: meta.v === 1 ? true : isKnownLiveFLV(url, type),
+      headers,
+      drm,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function readSource(search, hash = '') {
   const params = new URLSearchParams(search);
-  const shortKey = params.get('k') || params.get('v') || '';
-  const shortProvider = params.get('v') ? 'vgd' : 'isgd';
+  const hashClean = String(hash || '').replace(/^#/, '');
+  const hashParams = new URLSearchParams(hashClean.includes('=') ? hashClean : '');
+
+  const compactToken = params.get('z') || hashParams.get('z') || '';
+  if (compactToken) {
+    const decoded = decodeCompactPacket(compactToken);
+    if (decoded?.url) {
+      return { ...decoded, aliasSlug: '' };
+    }
+  }
+
+  const rawAlias = params.get('s') || params.get('id') || hashParams.get('s') || (!hashClean.includes('=') && hashClean ? hashClean : '');
+  const aliasSlug = /^[0-9A-Za-z_-]{1,48}$/.test(rawAlias) ? rawAlias : '';
+
   const url = params.get('url') || '';
   const type = SUPPORTED_FORMATS.includes(params.get('type')) ? params.get('type') : 'auto';
   const rawHeaders = params.get('headers') || params.get('h');
@@ -198,8 +360,7 @@ export function readSource(search) {
     live: params.has('live') ? params.get('live') === '1' : isKnownLiveFLV(url, type),
     headers,
     drm,
-    shortKey: /^[0-9A-Za-z_-]{3,32}$/.test(shortKey) ? shortKey : '',
-    shortProvider,
+    aliasSlug,
   };
 }
 
@@ -233,110 +394,141 @@ export function createPlayerLink(page, source) {
   return link.href;
 }
 
-const SHORT_CACHE_KEY = 'urlplay.shortlinks.v1';
+export function createCompactPlayerLink(page, source) {
+  const link = new URL(page);
+  link.search = '';
+  link.hash = '';
+  link.searchParams.set('z', encodeCompactPacket(source));
+  return link.href;
+}
 
-function loadShortCache() {
+export function createAliasPlayerLink(page, slug) {
+  const link = new URL(page);
+  link.search = '';
+  link.hash = '';
+  link.searchParams.set('s', slug);
+  return link.href;
+}
+
+const LOCAL_ALIASES_KEY = 'urlplay.local_aliases.v1';
+let repoStreamsCache = null;
+
+export async function loadRepoStreams() {
+  if (repoStreamsCache) return repoStreamsCache;
   try {
-    return JSON.parse(localStorage.getItem(SHORT_CACHE_KEY) || '{}') || {};
+    const res = await fetch(new URL('streams.json', document.baseURI).href, { cache: 'no-cache' });
+    if (!res.ok) {
+      repoStreamsCache = {};
+      return repoStreamsCache;
+    }
+    const data = await res.json();
+    repoStreamsCache = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    repoStreamsCache = {};
+  }
+  return repoStreamsCache;
+}
+
+export function loadLocalAliases() {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_ALIASES_KEY) || '{}') || {};
   } catch {
     return {};
   }
 }
 
-function saveShortCache(cache) {
+export function saveLocalAlias(slug, source) {
+  const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '');
+  if (!cleanSlug || !source?.url) return '';
+  const aliases = loadLocalAliases();
+  aliases[cleanSlug] = {
+    url: source.url,
+    type: source.type || 'auto',
+    ...(source.live ? { live: true } : {}),
+    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
+    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+  };
   try {
-    const entries = Object.entries(cache).slice(-60);
-    localStorage.setItem(SHORT_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch { /* ignore storage quota errors */ }
+    localStorage.setItem(LOCAL_ALIASES_KEY, JSON.stringify(aliases));
+  } catch { /* ignore quota */ }
+  return cleanSlug;
 }
 
-export function buildShortPlayerLink(page, code, provider = 'isgd') {
-  const link = new URL(page);
-  link.search = '';
-  link.hash = '';
-  link.searchParams.set(provider === 'vgd' ? 'v' : 'k', code);
-  return link.href;
+function shortHash(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36).slice(0, 5);
 }
 
-export async function shortenShareLink(page, source) {
-  const fullUrl = createPlayerLink(page, source);
-  const cache = loadShortCache();
-  if (cache[fullUrl]?.code) {
-    const { code, provider, directShortUrl } = cache[fullUrl];
-    return {
-      code,
-      provider,
-      directShortUrl,
-      playerShortUrl: buildShortPlayerLink(page, code, provider),
-      fullUrl,
-    };
+function generateDefaultSlug(source) {
+  try {
+    const hostParts = new URL(source.url).hostname.split('.').filter((p) => !['www', 'com', 'net', 'org', 'jp', 'ne', 'co', 'live', 'cdn', 'cdn0'].includes(p));
+    const prefix = (hostParts[0] || 'stream').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 10) || 'stream';
+    const sig = `${source.url}|${JSON.stringify(source.headers || {})}|${JSON.stringify(source.drm || {})}`;
+    return `${prefix}-${shortHash(sig)}`;
+  } catch {
+    return `stream-${shortHash(source.url || '')}`;
   }
+}
 
-  const endpoints = [
-    { provider: 'isgd', api: 'https://is.gd/create.php' },
-    { provider: 'vgd', api: 'https://v.gd/create.php' },
-  ];
+function sourcesMatch(a, b) {
+  if (!a || !b || a.url !== b.url) return false;
+  const ah = JSON.stringify(sanitizeHeaders(a.headers) || null);
+  const bh = JSON.stringify(sanitizeHeaders(b.headers) || null);
+  const ad = JSON.stringify(sanitizeDrmConfig(a.drm) || null);
+  const bd = JSON.stringify(sanitizeDrmConfig(b.drm) || null);
+  return ah === bh && ad === bd;
+}
 
-  for (const { provider, api } of endpoints) {
-    try {
-      const body = new URLSearchParams({ format: 'json', url: fullUrl });
-      const res = await fetch(api, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: body.toString(),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data?.shorturl) {
-        const parsed = new URL(data.shorturl);
-        const code = parsed.pathname.replace(/^\/+|\/+$/g, '');
-        if (code) {
-          cache[fullUrl] = { code, provider, directShortUrl: data.shorturl };
-          cache[`code:${provider}:${code}`] = fullUrl;
-          saveShortCache(cache);
-          return {
-            code,
-            provider,
-            directShortUrl: data.shorturl,
-            playerShortUrl: buildShortPlayerLink(page, code, provider),
-            fullUrl,
-          };
-        }
-      }
-    } catch { /* try next endpoint */ }
+export function findOrRegisterLocalAlias(source, repoStreams = {}) {
+  if (!source?.url) return { slug: '', inRepo: false };
+  for (const [slug, entry] of Object.entries(repoStreams || {})) {
+    if (sourcesMatch(source, entry)) {
+      saveLocalAlias(slug, source);
+      return { slug, inRepo: true };
+    }
   }
+  const local = loadLocalAliases();
+  for (const [slug, entry] of Object.entries(local)) {
+    if (sourcesMatch(source, entry)) {
+      return { slug, inRepo: Boolean(repoStreams?.[slug]) };
+    }
+  }
+  const slug = generateDefaultSlug(source);
+  saveLocalAlias(slug, source);
+  return { slug, inRepo: Boolean(repoStreams?.[slug]) };
+}
 
+export async function resolveAliasSlug(slug) {
+  const repo = await loadRepoStreams();
+  const local = loadLocalAliases();
+  const entry = local[slug] || repo[slug];
+  if (!entry || !entry.url) return null;
   return {
-    code: '',
-    provider: '',
-    directShortUrl: '',
-    playerShortUrl: fullUrl,
-    fullUrl,
+    url: entry.url,
+    type: SUPPORTED_FORMATS.includes(entry.type) ? entry.type : 'auto',
+    live: Boolean(entry.live) || isKnownLiveFLV(entry.url, entry.type),
+    headers: sanitizeHeaders(entry.headers),
+    drm: sanitizeDrmConfig(entry.drm),
+    inRepo: Boolean(repo[slug]),
   };
 }
 
-export async function resolveShortKey(code, provider = 'isgd') {
-  const cache = loadShortCache();
-  const cacheKey = `code:${provider}:${code}`;
-  if (typeof cache[cacheKey] === 'string' && cache[cacheKey]) {
-    return cache[cacheKey];
-  }
-
-  const host = provider === 'vgd' ? 'https://v.gd' : 'https://is.gd';
-  const reqUrl = `${host}/forward.php?format=json&shorturl=${encodeURIComponent(code)}`;
-  const res = await fetch(reqUrl);
-  if (!res.ok) throw new Error(`Short link lookup failed (HTTP ${res.status}).`);
-  const data = await res.json();
-  if (!data?.url) {
-    throw new Error(data?.errormessage || 'This short link was not found or has expired.');
-  }
-  const unescaped = String(data.url)
-    .replaceAll('&amp;', '&')
-    .replaceAll('&#038;', '&')
-    .replaceAll('&quot;', '"');
-  cache[cacheKey] = unescaped;
-  saveShortCache(cache);
-  return unescaped;
+export function buildStreamsJsonString(slug, source, repoStreams = {}) {
+  const merged = { ...(repoStreams || {}) };
+  const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '') || generateDefaultSlug(source);
+  merged[cleanSlug] = {
+    title: sourceLabel(source.url),
+    url: source.url,
+    type: source.type || 'auto',
+    ...(source.live ? { live: true } : {}),
+    ...(sanitizeHeaders(source.headers) ? { headers: sanitizeHeaders(source.headers) } : {}),
+    ...(sanitizeDrmConfig(source.drm) ? { drm: sanitizeDrmConfig(source.drm) } : {}),
+  };
+  return JSON.stringify(merged, null, 2);
 }
 
 export function sourceLabel(url) {

@@ -9,8 +9,13 @@ import {
   sanitizeDrmConfig,
   readSource,
   createPlayerLink,
-  shortenShareLink,
-  resolveShortKey,
+  createCompactPlayerLink,
+  createAliasPlayerLink,
+  loadRepoStreams,
+  saveLocalAlias,
+  findOrRegisterLocalAlias,
+  resolveAliasSlug,
+  buildStreamsJsonString,
   sourceLabel,
 } from './player-utils.js';
 import { qualityChoices, screenshotFilename, initFrameCapture, captureFrame } from './player-tools.js';
@@ -401,9 +406,11 @@ function fail(title, message, { showDrmAction = false } = {}) {
   refreshScreenshot();
 }
 
-let shareLinkMode = 'playerShort';
-let currentShortInfo = null;
-let shortenSeq = 0;
+let shareLinkMode = 'alias';
+let shareLinkModeManual = false;
+let currentAliasSlug = '';
+let currentAliasInRepo = false;
+let repoStreamsMap = {};
 
 function buildShareSource() {
   if (!source) return null;
@@ -414,67 +421,81 @@ function buildShareSource() {
   };
 }
 
-function getDisplayedShareUrl(fullUrl) {
-  if (shareLinkMode === 'full') return fullUrl;
-  if (currentShortInfo && currentShortInfo.fullUrl === fullUrl) {
-    if (shareLinkMode === 'directShort' && currentShortInfo.directShortUrl) {
-      return currentShortInfo.directShortUrl;
-    }
-    if (currentShortInfo.playerShortUrl) {
-      return currentShortInfo.playerShortUrl;
-    }
-  }
-  return fullUrl;
+function getDisplayedShareUrl(shareable) {
+  if (!shareable) return '';
+  if (shareLinkMode === 'full') return createPlayerLink(location.href, shareable);
+  if (shareLinkMode === 'compact') return createCompactPlayerLink(location.href, shareable);
+  if (currentAliasSlug) return createAliasPlayerLink(location.href, currentAliasSlug);
+  return createCompactPlayerLink(location.href, shareable);
 }
 
 function syncShareModeButtons() {
   document.querySelectorAll('[data-share-mode]').forEach((btn) => {
     btn.setAttribute('aria-pressed', String(btn.dataset.shareMode === shareLinkMode));
   });
+  $('share-alias-row').hidden = shareLinkMode !== 'alias';
 }
 
-async function ensureShortenedForCurrentSource({ replaceAddress = true } = {}) {
+function updateAliasStatusUI() {
+  $('alias-slug-input').value = currentAliasSlug;
+  const statusEl = $('alias-repo-status');
+  if (currentAliasInRepo) {
+    statusEl.dataset.inRepo = 'true';
+    statusEl.textContent = '✓ In streams.json — this short ?s= link works for all friends!';
+  } else {
+    statusEl.dataset.inRepo = 'false';
+    statusEl.textContent = 'Local only until added to streams.json · Use Compact (?z=…) to share immediately without uploading streams.json';
+  }
+}
+
+async function syncLocalAliasForCurrentSource({ replaceAddress = true, preferredSlug = '' } = {}) {
   const shareable = buildShareSource();
-  if (!shareable || shareable.url === exampleURL) return null;
-  const fullUrl = createPlayerLink(location.href, shareable);
-  if (currentShortInfo && currentShortInfo.fullUrl === fullUrl && currentShortInfo.code) {
-    if (replaceAddress) {
-      try { history.replaceState(null, '', currentShortInfo.playerShortUrl); } catch { /* ignore */ }
+  if (!shareable || shareable.url === exampleURL) return;
+  repoStreamsMap = await loadRepoStreams();
+  if (preferredSlug) {
+    const clean = saveLocalAlias(preferredSlug, shareable);
+    if (clean) {
+      currentAliasSlug = clean;
+      currentAliasInRepo = Boolean(repoStreamsMap?.[clean]);
     }
-    return currentShortInfo;
+  } else {
+    const found = findOrRegisterLocalAlias(shareable, repoStreamsMap);
+    currentAliasSlug = found.slug;
+    currentAliasInRepo = found.inRepo;
   }
-  const seq = ++shortenSeq;
-  const info = await shortenShareLink(location.href, shareable);
-  if (seq !== shortenSeq) return info;
-  currentShortInfo = info;
-  if (info.code && replaceAddress) {
-    try { history.replaceState(null, '', info.playerShortUrl); } catch { /* ignore */ }
+  if (!shareLinkModeManual) {
+    shareLinkMode = currentAliasInRepo ? 'alias' : 'compact';
   }
-  const latestShareable = buildShareSource();
-  if (latestShareable) {
-    const latestFull = createPlayerLink(location.href, latestShareable);
-    $('share-url').value = getDisplayedShareUrl(latestFull);
+  syncShareModeButtons();
+  updateAliasStatusUI();
+  const latest = buildShareSource();
+  if (latest) {
+    $('share-url').value = getDisplayedShareUrl(latest);
+    if (replaceAddress && currentAliasSlug) {
+      try {
+        history.replaceState(null, '', createAliasPlayerLink(location.href, currentAliasSlug));
+      } catch { /* ignore */ }
+    }
   }
-  return info;
 }
 
 function updateAddress() {
   const shareable = buildShareSource();
   if (!shareable || shareable.url === exampleURL) return;
-  const href = createPlayerLink(location.href, shareable);
-  try { history.replaceState(null, '', getDisplayedShareUrl(href)); } catch { /* Player also works in restricted embeds. */ }
-  ensureShortenedForCurrentSource({ replaceAddress: true });
+  syncLocalAliasForCurrentSource({ replaceAddress: true });
 }
 
 function refreshSharePanel() {
   const shareable = buildShareSource();
   if (!shareable) return;
-  const fullUrl = createPlayerLink(location.href, shareable);
   syncShareModeButtons();
-  $('share-url').value = getDisplayedShareUrl(fullUrl);
-  if (shareable.url !== exampleURL) {
-    ensureShortenedForCurrentSource({ replaceAddress: true });
+  if (shareable.url !== exampleURL && !currentAliasSlug) {
+    const found = findOrRegisterLocalAlias(shareable, repoStreamsMap);
+    currentAliasSlug = found.slug;
+    currentAliasInRepo = found.inRepo;
   }
+  updateAliasStatusUI();
+  $('share-url').value = getDisplayedShareUrl(shareable);
 
   const tags = [];
   tags.push({ label: 'Format', value: FORMAT_LABELS[shareable.type] || shareable.type.toUpperCase() });
@@ -510,7 +531,7 @@ function updateFormatBadge() {
   $('format-badge').textContent = parts.join(' · ');
 }
 
-function loadSource(raw, selected, live, { updateURL = true, example = false, inlineHeaders = null, inlineDrm = null } = {}) {
+function loadSource(raw, selected, live, { updateURL = true, example = false, inlineHeaders = null, inlineDrm = null, preferredAlias = '' } = {}) {
   $('form-error').hidden = true;
   $('video-url').removeAttribute('aria-invalid');
   let url, type;
@@ -596,11 +617,17 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
   $('copy-link').disabled = false;
   clearTimeout(copyTimer);
   $('copy-label').textContent = 'Copy shareable link';
+  shareLinkModeManual = false;
+  currentAliasSlug = preferredAlias || '';
   refreshSharePanel();
   $('video-message').hidden = true;
   video.removeAttribute('poster');
   status('Loading video…', 'loading');
-  if (updateURL) updateAddress();
+  if (!isExample) {
+    syncLocalAliasForCurrentSource({ replaceAddress: true, preferredSlug: preferredAlias });
+  } else if (updateURL) {
+    updateAddress();
+  }
   readinessTimer = setTimeout(() => {
     if (current === generation && video.readyState < 1) {
       if (isExample) {
@@ -1285,23 +1312,51 @@ $('example-button').addEventListener('click', () => {
 
 document.querySelectorAll('[data-share-mode]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    shareLinkMode = btn.dataset.shareMode || 'playerShort';
+    shareLinkModeManual = true;
+    shareLinkMode = btn.dataset.shareMode || 'alias';
     refreshSharePanel();
   });
+});
+
+function applyCustomAliasSlug() {
+  const slug = $('alias-slug-input').value.trim().replace(/[^0-9A-Za-z_-]/g, '');
+  if (!slug) return;
+  syncLocalAliasForCurrentSource({ replaceAddress: true, preferredSlug: slug });
+}
+
+$('save-alias-slug').addEventListener('click', applyCustomAliasSlug);
+$('alias-slug-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    applyCustomAliasSlug();
+  }
+});
+
+$('download-streams-json').addEventListener('click', async () => {
+  const shareable = buildShareSource();
+  if (!shareable) return;
+  const slug = $('alias-slug-input').value.trim().replace(/[^0-9A-Za-z_-]/g, '') || currentAliasSlug;
+  repoStreamsMap = await loadRepoStreams();
+  const jsonText = buildStreamsJsonString(slug, shareable, repoStreamsMap);
+  const blob = new Blob([`${jsonText}\n`], { type: 'application/json' });
+  const objectURL = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectURL;
+  link.download = 'streams.json';
+  document.body.append(link);
+  try { link.click(); }
+  finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectURL), 30000);
+  }
 });
 
 async function copyShareableLink() {
   const shareable = buildShareSource();
   if (!shareable) return;
-  const fullUrl = createPlayerLink(location.href, shareable);
   refreshSharePanel();
   $('share-fallback').hidden = false;
-
-  if (shareLinkMode !== 'full' && shareable.url !== exampleURL) {
-    $('copy-label').textContent = 'Shortening…';
-    await ensureShortenedForCurrentSource({ replaceAddress: true });
-  }
-  const link = getDisplayedShareUrl(fullUrl);
+  const link = getDisplayedShareUrl(shareable);
   $('share-url').value = link;
 
   try {
@@ -1336,36 +1391,23 @@ document.addEventListener('keydown', (event) => {
 });
 
 async function restoreLocation() {
-  let initial = readSource(location.search);
+  let initial = readSource(location.search, location.hash);
   renderSavedRulesLists();
 
-  if (!initial.url && initial.shortKey) {
-    const shortKey = initial.shortKey;
-    const shortProvider = initial.shortProvider;
-    status('Resolving short link…', 'loading');
-    $('source-name').textContent = `Short link (${shortKey})`;
-    try {
-      const resolvedHref = await resolveShortKey(shortKey, shortProvider);
-      const parsed = new URL(resolvedHref, location.href);
-      initial = readSource(parsed.search);
-      const canonicalFull = createPlayerLink(location.href, {
-        url: initial.url,
-        type: detectFormat(initial.url, initial.type),
-        live: initial.live,
-        headers: initial.headers,
-        drm: initial.drm,
-      });
-      currentShortInfo = {
-        code: shortKey,
-        provider: shortProvider,
-        directShortUrl: `${shortProvider === 'vgd' ? 'https://v.gd' : 'https://is.gd'}/${shortKey}`,
-        playerShortUrl: location.href,
-        fullUrl: canonicalFull,
-      };
-    } catch (error) {
-      fail('Short link could not be resolved', error.message);
+  let matchedSlug = '';
+  if (!initial.url && initial.aliasSlug) {
+    matchedSlug = initial.aliasSlug;
+    status('Loading local stream preset…', 'loading');
+    $('source-name').textContent = `Preset (${matchedSlug})`;
+    const resolved = await resolveAliasSlug(matchedSlug);
+    if (!resolved?.url) {
+      fail(
+        `Preset "${matchedSlug}" not found`,
+        `Could not find "${matchedSlug}" in your browser storage or streams.json. Ask your friend for the Compact (?z=…) link or add "${matchedSlug}" to streams.json.`,
+      );
       return;
     }
+    initial = { ...resolved, aliasSlug: matchedSlug };
   }
 
   $('video-url').value = initial.url;
@@ -1378,6 +1420,7 @@ async function restoreLocation() {
       updateURL: false,
       inlineHeaders: initial.headers,
       inlineDrm: initial.drm,
+      preferredAlias: matchedSlug,
     });
   } else {
     loadSource(exampleURL, 'flv', false, { updateURL: false, example: true });

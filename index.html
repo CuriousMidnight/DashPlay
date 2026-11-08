@@ -118,15 +118,22 @@
 
       <div id="share-fallback" class="share-fallback" hidden>
         <div class="share-fallback-row">
-          <label for="share-url">Shareable link:</label>
+          <label for="share-url">Shareable link (100% local):</label>
           <div class="share-mode-group" role="group" aria-label="Link style">
-            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="playerShort" aria-pressed="true" title="Short link on your GitHub Pages domain (?k=...)">Short (?k=…)</button>
-            <button id="share-mode-direct" class="preset-chip" type="button" data-share-mode="directShort" aria-pressed="false" title="Tiny redirect link (is.gd/…)">Tiny (is.gd)</button>
-            <button id="share-mode-full" class="preset-chip" type="button" data-share-mode="full" aria-pressed="false" title="Full self-contained URL with all parameters">Full URL</button>
+            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="true" title="Short link using local storage & streams.json in your GitHub Pages repo (?s=...)">Short (?s=…)</button>
+            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="false" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
+            <button id="share-mode-full" class="preset-chip" type="button" data-share-mode="full" aria-pressed="false" title="Readable URL with all query parameters (?url=...)">Standard (?url=…)</button>
           </div>
           <input id="share-url" readonly type="text" aria-label="Shareable player link">
           <button id="copy-share-again" class="primary-button share-copy-btn" type="button">Copy</button>
           <button id="close-share" class="text-button" type="button">Close</button>
+        </div>
+        <div id="share-alias-row" class="share-alias-row">
+          <label for="alias-slug-input">Short name (<code>?s=</code>):</label>
+          <input id="alias-slug-input" class="alias-slug-input" type="text" placeholder="lemino" spellcheck="false">
+          <button id="save-alias-slug" class="rule-btn" type="button">Apply name</button>
+          <span id="alias-repo-status" class="alias-repo-status"></span>
+          <button id="download-streams-json" class="rule-btn" type="button" title="Download updated streams.json to commit to your GitHub repo so ?s=... works for everyone">Download streams.json</button>
         </div>
         <div id="share-meta" class="share-meta"></div>
       </div>
