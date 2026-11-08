@@ -1,4 +1,4 @@
-# URLplay — M3U8, MPD (DASH DRM), FLV, MP4 & MKV Web Player
+# URLplay — M3U8, MPD (DASH), FLV, MP4 & MKV Web Player
 
 URLplay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DASH (`.mpd`)**, **FLV (`.flv`)**, **MP4 (`.mp4`)**, and **Matroska (`.mkv`)** links. It runs entirely with client-side HTML, CSS, and JavaScript — ready to host directly on **GitHub Pages** without a backend server.
 
@@ -11,8 +11,8 @@ URLplay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DAS
 - **Per-site headers**:
   - Save custom request headers (such as `Referer`, `Origin`, `Authorization`, or custom token headers) per stream host (matching the host and its subdomains) for streams that otherwise return `403 Forbidden` errors.
   - Applied to HLS (`hls.js`), DASH (`dash.js`), FLV (`mpegts.js`), and Live MP4 (`fetch`) requests, and persisted locally in `localStorage`.
-- **DASH DRM (Widevine)**:
-  - Enter a Widevine **License URL**, optional **License Request Headers**, and **Robustness Level** (e.g. `SW_SECURE_DECODE`, `SW_SECURE_CRYPTO`, `HW_SECURE_DECODE`) when an encrypted `.mpd` stream requires it.
+- **DASH DRM**:
+  - Enter a **License URL**, optional **License Request Headers**, and **Robustness Level** (e.g. `SW_SECURE_DECODE`, `SW_SECURE_CRYPTO`, `HW_SECURE_DECODE`) when an encrypted `.mpd` stream requires it.
   - Automatically prompts when an encrypted DASH stream encounters a key-system or protection error, and optionally remembers configurations per stream host.
 - **Shareable links for friends**:
   - Click **Copy shareable link** to generate a single link containing the stream URL, format, per-site request headers, and Widevine DRM configuration:
