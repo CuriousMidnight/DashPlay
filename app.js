@@ -15,7 +15,6 @@ import {
   saveLocalAlias,
   findOrRegisterLocalAlias,
   resolveAliasSlug,
-  buildStreamsJsonString,
   loadGithubSyncConfig,
   saveGithubSyncConfig,
   clearGithubSyncConfig,
@@ -1444,25 +1443,6 @@ $('gh-sync-save').addEventListener('click', async () => {
   saveGithubSyncConfig({ repo, branch, token, autoSync });
   closeGhSyncModal();
   await pushCurrentStreamToGithub({ isAuto: false });
-});
-
-$('download-streams-json').addEventListener('click', async () => {
-  const shareable = buildShareSource();
-  if (!shareable) return;
-  const slug = $('alias-slug-input').value.trim().replace(/[^0-9A-Za-z_-]/g, '') || currentAliasSlug;
-  repoStreamsMap = await loadRepoStreams();
-  const jsonText = buildStreamsJsonString(slug, shareable, repoStreamsMap);
-  const blob = new Blob([`${jsonText}\n`], { type: 'application/json' });
-  const objectURL = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = objectURL;
-  link.download = 'streams.json';
-  document.body.append(link);
-  try { link.click(); }
-  finally {
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(objectURL), 30000);
-  }
 });
 
 async function copyShareableLink() {

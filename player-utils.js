@@ -681,16 +681,6 @@ export async function resolveAliasSlug(slug) {
   };
 }
 
-export function buildStreamsJsonString(slug, source, repoStreams = {}) {
-  const merged = { ...(repoStreams || {}) };
-  const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '') || generateDefaultSlug(source);
-  merged[cleanSlug] = {
-    title: sourceLabel(source.url),
-    z: encodeCompactPacket(source),
-  };
-  return JSON.stringify(merged, null, 2);
-}
-
 export function sourceLabel(url) {
   const parsed = new URL(url);
   let name = parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname;
