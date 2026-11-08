@@ -365,6 +365,38 @@ export function readSource(search, hash = '') {
   };
 }
 
+export function parseShareableInput(rawInput, base) {
+  if (!rawInput || typeof rawInput !== 'string') return null;
+  const trimmed = rawInput.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('?') || trimmed.startsWith('#')) {
+    const parsed = readSource(trimmed.startsWith('?') ? trimmed : '', trimmed.startsWith('#') ? trimmed : '');
+    if (parsed.url || parsed.aliasSlug) return parsed;
+  }
+  try {
+    const u = new URL(trimmed, base);
+    if (!u.search && !u.hash) return null;
+    const params = u.searchParams;
+    const hashClean = String(u.hash || '').replace(/^#/, '');
+    const hasShareParam =
+      params.has('z') ||
+      params.has('url') ||
+      params.has('s') ||
+      params.has('id') ||
+      hashClean.startsWith('z=') ||
+      hashClean.startsWith('s=');
+    if (!hasShareParam) return null;
+    if (/\.(m3u8|mpd|flv|mp4|m4v|mov|mkv|webm)$/i.test(u.pathname) && !params.has('z') && !params.has('url')) {
+      return null;
+    }
+    const parsed = readSource(u.search, u.hash);
+    if (parsed.url || parsed.aliasSlug) return parsed;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function createPlayerLink(page, source) {
   const link = new URL(page);
   link.search = '';
@@ -412,7 +444,9 @@ export function createAliasPlayerLink(page, slug) {
 }
 
 const LOCAL_ALIASES_KEY = 'dashplay.local_aliases.v1';
+const LEGACY_LOCAL_ALIASES_KEY = `${atob('dXJscGxheQ==')}.local_aliases.v1`;
 const GH_SYNC_KEY = 'dashplay.gh_sync.v1';
+const LEGACY_GH_SYNC_KEY = `${atob('dXJscGxheQ==')}.gh_sync.v1`;
 let repoStreamsCache = null;
 
 export function detectGithubRepoFromLocation(loc = window.location) {
@@ -431,7 +465,8 @@ export function detectGithubRepoFromLocation(loc = window.location) {
 export function loadGithubSyncConfig() {
   const defaultRepo = detectGithubRepoFromLocation();
   try {
-    const raw = JSON.parse(localStorage.getItem(GH_SYNC_KEY) || '{}') || {};
+    const rawStr = localStorage.getItem(GH_SYNC_KEY) || localStorage.getItem(LEGACY_GH_SYNC_KEY) || '{}';
+    const raw = JSON.parse(rawStr) || {};
     return {
       repo: typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : defaultRepo,
       branch: typeof raw.branch === 'string' && raw.branch.trim() ? raw.branch.trim() : 'main',
@@ -587,7 +622,9 @@ export async function loadRepoStreams({ forceRefresh = false } = {}) {
 
 export function loadLocalAliases() {
   try {
-    return JSON.parse(localStorage.getItem(LOCAL_ALIASES_KEY) || '{}') || {};
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_LOCAL_ALIASES_KEY) || '{}') || {};
+    const current = JSON.parse(localStorage.getItem(LOCAL_ALIASES_KEY) || '{}') || {};
+    return { ...legacy, ...current };
   } catch {
     return {};
   }
@@ -665,6 +702,23 @@ export async function resolveAliasSlug(slug) {
 
   if (!unpacked?.url) {
     try {
+      const cfg = loadGithubSyncConfig();
+      const rawUrl = `https://raw.githubusercontent.com/${cfg.repo}/${encodeURIComponent(cfg.branch || 'main')}/streams.json?t=${Date.now()}`;
+      const rawRes = await fetch(rawUrl, { cache: 'no-store' });
+      if (rawRes.ok) {
+        const rawStreams = await rawRes.json();
+        const rawUnpacked = unpackStreamEntry(rawStreams?.[slug]);
+        if (rawUnpacked?.url) {
+          repoStreamsCache = { ...(repoStreamsCache || {}), ...rawStreams };
+          unpacked = rawUnpacked;
+          inRepo = true;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (!unpacked?.url) {
+    try {
       const { streams: liveRepoStreams } = await fetchGithubApiStreams();
       const liveUnpacked = unpackStreamEntry(liveRepoStreams?.[slug]);
       if (liveUnpacked?.url) {
@@ -679,6 +733,16 @@ export async function resolveAliasSlug(slug) {
     ...unpacked,
     inRepo,
   };
+}
+
+export function buildStreamsJsonString(slug, source, repoStreams = {}) {
+  const merged = { ...(repoStreams || {}) };
+  const cleanSlug = String(slug || '').trim().replace(/[^0-9A-Za-z_-]/g, '') || generateDefaultSlug(source);
+  merged[cleanSlug] = {
+    title: sourceLabel(source.url),
+    z: encodeCompactPacket(source),
+  };
+  return JSON.stringify(merged, null, 2);
 }
 
 export function sourceLabel(url) {

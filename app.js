@@ -8,6 +8,7 @@ import {
   sanitizeHeaders,
   sanitizeProtectionConfig,
   readSource,
+  parseShareableInput,
   createPlayerLink,
   createCompactPlayerLink,
   createAliasPlayerLink,
@@ -20,10 +21,10 @@ import {
   clearGithubSyncConfig,
   pushStreamToGithubRepo,
   sourceLabel,
-} from './player-utils.js';
-import { qualityChoices, screenshotFilename, initFrameCapture, captureFrame } from './player-tools.js';
-import { initPlayerControls } from './player-controls.js';
-import { LiveMP4Player } from './live-mp4.js';
+} from './player-utils.js?v=4';
+import { qualityChoices, screenshotFilename, initFrameCapture, captureFrame } from './player-tools.js?v=4';
+import { initPlayerControls } from './player-controls.js?v=4';
+import { LiveMP4Player } from './live-mp4.js?v=4';
 import {
   loadSiteHeaders,
   upsertSiteHeaders,
@@ -39,7 +40,7 @@ import {
   createHeaderRow,
   populateHeaderRows,
   readHeaderRows,
-} from './player-config.js';
+} from './player-config.js?v=4';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -409,7 +410,7 @@ function fail(title, message, { showProtectionAction = false } = {}) {
   refreshScreenshot();
 }
 
-let shareLinkMode = 'alias';
+let shareLinkMode = 'compact';
 let shareLinkModeManual = false;
 let currentAliasSlug = '';
 let currentAliasInRepo = false;
@@ -424,12 +425,23 @@ function buildShareSource() {
   };
 }
 
+function getBestSelfContainedMode(shareable) {
+  if (!shareable) return 'compact';
+  const compactLink = createCompactPlayerLink(location.href, shareable);
+  const fullLink = createPlayerLink(location.href, shareable);
+  return compactLink.length <= fullLink.length ? 'compact' : 'full';
+}
+
 function getDisplayedShareUrl(shareable) {
   if (!shareable) return '';
   if (shareLinkMode === 'full') return createPlayerLink(location.href, shareable);
   if (shareLinkMode === 'compact') return createCompactPlayerLink(location.href, shareable);
-  if (currentAliasSlug) return createAliasPlayerLink(location.href, currentAliasSlug);
-  return createCompactPlayerLink(location.href, shareable);
+  if (currentAliasSlug && (currentAliasInRepo || shareLinkModeManual)) {
+    return createAliasPlayerLink(location.href, currentAliasSlug);
+  }
+  return getBestSelfContainedMode(shareable) === 'full'
+    ? createPlayerLink(location.href, shareable)
+    : createCompactPlayerLink(location.href, shareable);
 }
 
 function syncShareModeButtons() {
@@ -511,16 +523,19 @@ async function syncLocalAliasForCurrentSource({ replaceAddress = true, preferred
   }
   const ghCfg = loadGithubSyncConfig();
   if (!shareLinkModeManual) {
-    shareLinkMode = (currentAliasInRepo || (ghCfg.token && ghCfg.autoSync)) ? 'alias' : 'compact';
+    shareLinkMode = currentAliasInRepo ? 'alias' : getBestSelfContainedMode(shareable);
   }
   syncShareModeButtons();
   updateAliasStatusUI();
   const latest = buildShareSource();
   if (latest) {
     $('share-url').value = getDisplayedShareUrl(latest);
-    if (replaceAddress && currentAliasSlug) {
+    if (replaceAddress) {
       try {
-        history.replaceState(null, '', createAliasPlayerLink(location.href, currentAliasSlug));
+        const addrUrl = currentAliasInRepo && currentAliasSlug
+          ? createAliasPlayerLink(location.href, currentAliasSlug)
+          : getDisplayedShareUrl(latest);
+        history.replaceState(null, '', addrUrl);
       } catch { /* ignore */ }
     }
   }
@@ -584,6 +599,40 @@ function updateFormatBadge() {
 function loadSource(raw, selected, live, { updateURL = true, example = false, inlineHeaders = null, inlineProtection = null, preferredAlias = '' } = {}) {
   $('form-error').hidden = true;
   $('video-url').removeAttribute('aria-invalid');
+
+  if (!example) {
+    const embeddedShare = parseShareableInput(raw, document.baseURI);
+    if (embeddedShare) {
+      if (!embeddedShare.url && embeddedShare.aliasSlug) {
+        status('Loading local stream preset…', 'loading');
+        $('source-name').textContent = `Preset (${embeddedShare.aliasSlug})`;
+        resolveAliasSlug(embeddedShare.aliasSlug).then((resolved) => {
+          if (!resolved?.url) {
+            fail(
+              `Preset "${embeddedShare.aliasSlug}" not found`,
+              `Could not find "${embeddedShare.aliasSlug}" in your browser storage or streams.json. Use the Compact (?z=…) or Standard (?url=…) link instead.`,
+            );
+            return;
+          }
+          loadSource(resolved.url, resolved.type || 'auto', Boolean(resolved.live), {
+            updateURL,
+            inlineHeaders: resolved.headers,
+            inlineProtection: resolved.protection,
+            preferredAlias: embeddedShare.aliasSlug,
+          });
+        });
+        return;
+      }
+      if (embeddedShare.url) {
+        raw = embeddedShare.url;
+        if (embeddedShare.type && embeddedShare.type !== 'auto') selected = embeddedShare.type;
+        if (embeddedShare.live) live = true;
+        if (embeddedShare.headers && !inlineHeaders) inlineHeaders = embeddedShare.headers;
+        if (embeddedShare.protection && !inlineProtection) inlineProtection = embeddedShare.protection;
+      }
+    }
+  }
+
   let url, type;
   try {
     url = normalizeSource(raw, document.baseURI);
@@ -1451,11 +1500,6 @@ async function copyShareableLink() {
   refreshSharePanel();
   $('share-fallback').hidden = false;
 
-  const ghCfg = loadGithubSyncConfig();
-  if (shareLinkMode === 'alias' && !currentAliasInRepo && ghCfg.token) {
-    await pushCurrentStreamToGithub({ isAuto: true });
-  }
-
   const link = getDisplayedShareUrl(shareable);
   $('share-url').value = link;
 
@@ -1473,6 +1517,16 @@ async function copyShareableLink() {
     $('copy-label').textContent = 'Copy shareable link';
     $('share-url').focus();
     $('share-url').select();
+  }
+
+  const ghCfg = loadGithubSyncConfig();
+  if (shareLinkMode === 'alias' && !currentAliasInRepo && ghCfg.token) {
+    const ok = await pushCurrentStreamToGithub({ isAuto: true });
+    if (ok) {
+      const updated = getDisplayedShareUrl(buildShareSource());
+      $('share-url').value = updated;
+      try { await navigator.clipboard.writeText(updated); } catch { /* ignore */ }
+    }
   }
 }
 

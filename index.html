@@ -8,10 +8,10 @@
   <meta name="theme-color" content="#f7f7f2">
   <title>DashPlay — M3U8, MPD (DASH Protection), FLV, MP4 &amp; MKV Web Player</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d8542d'/%3E%3Cpath d='m11 8 13 8-13 8Z' fill='%23fff'/%3E%3C/svg%3E" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=4">
   <script defer src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.js" onerror="this.onerror=null;this.src='vendor/mpegts-1.8.0.js'"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js" onerror="this.onerror=null;this.src='vendor/hls-1.6.13.min.js'"></script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=4"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to player</a>
@@ -120,8 +120,8 @@
         <div class="share-fallback-row">
           <label for="share-url">Shareable link (100% local):</label>
           <div class="share-mode-group" role="group" aria-label="Link style">
-            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="true" title="Short link using local storage &amp; streams.json in your GitHub Pages repo (?s=...)">Admin Only</button>
-            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="false" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
+            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="false" title="Short link using local storage &amp; streams.json in your GitHub Pages repo (?s=...)">Admin Only</button>
+            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="true" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
             <button id="share-mode-full" class="preset-chip" type="button" data-share-mode="full" aria-pressed="false" title="Readable URL with all query parameters (?url=...)">Standard (?url=…)</button>
           </div>
           <input id="share-url" readonly type="text" aria-label="Shareable player link">

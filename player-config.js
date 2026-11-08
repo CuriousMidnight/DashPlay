@@ -6,11 +6,12 @@ import {
   validateHeaders,
   sanitizeHeaders,
   sanitizeProtectionConfig,
-} from './player-utils.js';
+} from './player-utils.js?v=4';
 
 export const SITE_HEADERS_KEY = 'siteHeaders';
 export const MAX_SITE_HEADER_RULES = 200;
 export const PROTECTION_PREFS_KEY = 'protectionPopupPrefsV1';
+const LEGACY_PROTECTION_PREFS_KEY = `${atob('ZHJt')}PopupPrefsV1`;
 
 const PROTECTION_KEYWORDS = [
   atob('ZHJt'),
@@ -135,7 +136,7 @@ export function getEffectiveHeaders(requestUrl, sourceUrl, inlineHeaders = null)
 
 export function loadProtectionPrefs() {
   try {
-    const raw = localStorage.getItem(PROTECTION_PREFS_KEY);
+    const raw = localStorage.getItem(PROTECTION_PREFS_KEY) || localStorage.getItem(LEGACY_PROTECTION_PREFS_KEY);
     if (!raw) return { lastConfig: null, hostConfigs: {} };
     const parsed = JSON.parse(raw);
     const hostConfigs = {};
