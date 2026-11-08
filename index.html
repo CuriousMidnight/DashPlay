@@ -163,7 +163,7 @@
         <div class="feature-card-header">
           <div>
             <span class="feature-tag">ENCRYPTED .MPD STREAMS</span>
-            <h2>DASH DRM (Widevine)</h2>
+            <h2>DASH DRM</h2>
             <p>Enter a license URL, request headers and robustness level when an encrypted stream needs it. Configurations can be remembered per host and shared via link.</p>
           </div>
           <button id="card-open-drm" class="secondary-action-button" type="button">+ Configure Widevine</button>
@@ -182,8 +182,8 @@
         </article>
         <article>
           <span class="step-number">02</span>
-          <h3>Add headers or Widevine DRM</h3>
-          <p>Save per-site request headers for streams that return 403 errors, or enter a Widevine license URL, headers, and robustness level for encrypted DASH streams.</p>
+          <h3>Add headers or license DRM</h3>
+          <p>Save per-site request headers for streams that return 403 errors, or enter a license URL, headers, and robustness level for encrypted DASH streams.</p>
         </article>
         <article>
           <span class="step-number">03</span>
@@ -313,7 +313,7 @@
 
         <label class="modal-checkbox">
           <input id="drm-include-share" type="checkbox" checked>
-          <span>Include Widevine DRM config when generating a shareable link</span>
+          <span>Include license DRM config when generating a shareable link</span>
         </label>
 
         <p id="drm-error" class="modal-error" role="alert" hidden></p>
