@@ -9,6 +9,7 @@ import {
   parseClearKeys,
   formatClearKeys,
   clearKeysToDashMap,
+  createClearKeyJwkBuffer,
   rewriteMpdForClearKey,
   sanitizeProtectionConfig,
   readSource,
@@ -420,7 +421,7 @@ function fail(title, message, { showProtectionAction = false } = {}) {
   dispose();
   $('video-message-title').textContent = title;
   $('video-message-text').textContent = message;
-  $('error-protection-button').hidden = !showProtectionAction && source?.type !== 'dash';
+  $('error-protection-button').hidden = !showProtectionAction && !['dash', 'hls'].includes(source?.type);
   $('video-message').hidden = false;
   status('Unable to play this source', 'error');
   singleQuality('Unavailable', 'Load a playable video to see its quality.');
@@ -604,7 +605,7 @@ function updateFormatBadge() {
   const base = FORMAT_LABELS[source.type] || source.type.toUpperCase();
   const parts = [base];
   if (source.live) parts.push('LIVE');
-  const activeProt = source.type === 'dash' ? resolveStreamProtection(source.url) : null;
+  const activeProt = ['dash', 'hls'].includes(source.type) ? resolveStreamProtection(source.url) : null;
   if (activeProt?.clearKeys) parts.push('CLEARKEY');
   else if (activeProt?.licenseUrl) parts.push('PROTECTED');
   if (resolveStreamHeaders(source.url, customSessionHeaders)) parts.push('HEADERS');
@@ -783,7 +784,7 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
       refreshQuality();
       startDashPlayback(url, current, effectiveHeaders, effectiveProtection);
     } else {
-      startHlsPlayback(url, current);
+      startHlsPlayback(url, current, effectiveHeaders, effectiveProtection);
     }
   } catch (error) {
     fail('Playback is unavailable', error.message);
@@ -840,15 +841,62 @@ async function startFlvPlayback(url, current, effectiveHeaders, isExample) {
   }
 }
 
-async function startHlsPlayback(url, current) {
+async function startHlsPlayback(url, current, effectiveHeaders, effectiveProtection) {
   try {
     const Hls = await ensureHls().catch(() => null);
     if (current !== generation || failed) return;
     if (Hls && Hls.isSupported()) {
+      const clearKeys = effectiveProtection?.clearKeys;
+      const hasClearKeys = Boolean(clearKeys && Object.keys(clearKeys).length);
+      const jwkBuffer = hasClearKeys ? createClearKeyJwkBuffer(clearKeys) : null;
+      const hasDrm = hasClearKeys || Boolean(effectiveProtection?.licenseUrl);
+
       const hls = new Hls({
         enableWorker: true,
+        ...(hasDrm ? {
+          emeEnabled: true,
+          drmSystems: {
+            ...(hasClearKeys ? {
+              'org.w3.clearkey': {
+                licenseUrl: 'data:application/json;base64,e30=',
+              },
+            } : {}),
+            ...(effectiveProtection?.licenseUrl ? {
+              'com.widevine.alpha': {
+                licenseUrl: effectiveProtection.licenseUrl,
+              },
+            } : {}),
+          },
+          licenseXhrSetup(xhr, licenseUrl, keyContext, licenseChallenge) {
+            if (hasClearKeys && jwkBuffer) {
+              xhr.open = () => {};
+              xhr.send = () => {
+                setTimeout(() => {
+                  try {
+                    Object.defineProperty(xhr, 'readyState', { value: 4, configurable: true });
+                    Object.defineProperty(xhr, 'status', { value: 200, configurable: true });
+                    Object.defineProperty(xhr, 'response', { value: jwkBuffer, configurable: true });
+                  } catch { /* ignore */ }
+                  if (typeof xhr.onreadystatechange === 'function') {
+                    xhr.onreadystatechange();
+                  }
+                }, 0);
+              };
+            } else if (effectiveProtection?.headers) {
+              for (const [k, v] of Object.entries(effectiveProtection.headers)) {
+                try { xhr.setRequestHeader(k, v); } catch { /* Skip browser-restricted header names */ }
+              }
+            }
+          },
+          licenseResponseCallback(xhr, licenseUrl, keyContext) {
+            if (hasClearKeys && jwkBuffer) {
+              return jwkBuffer;
+            }
+            return xhr.response;
+          },
+        } : {}),
         xhrSetup(xhr, reqUrl) {
-          const hdrs = getEffectiveHeaders(reqUrl, url, customSessionHeaders);
+          const hdrs = getEffectiveHeaders(reqUrl, url, customSessionHeaders || effectiveHeaders);
           if (!hdrs) return;
           if (!xhr.readyState) xhr.open('GET', reqUrl, true);
           for (const [k, v] of Object.entries(hdrs)) {
@@ -872,6 +920,17 @@ async function startHlsPlayback(url, current) {
             : data.details?.startsWith('level') ? 'variant playlist'
             : data.details?.startsWith('key') ? 'encryption key' : 'video segment';
           networkFailure(resource, data.response?.code);
+        } else if (data.type === Hls.ErrorTypes.KEY_SYSTEM_ERROR) {
+          fail(
+            'Encrypted HLS stream requires Protection',
+            'Key in decryption keys (KID:KEY pairs) or configure stream protection to play this encrypted HLS stream.',
+            { showProtectionAction: true },
+          );
+          if (!protectionPrompting) {
+            openProtectionModal({
+              detectedError: data.details || 'Key system / license required for this HLS stream.',
+            });
+          }
         } else {
           fail('This stream could not be decoded', 'The playlist or a video segment is invalid, or its codec is not supported by this browser.');
         }
@@ -1331,7 +1390,7 @@ $('protection-apply').addEventListener('click', () => {
 
   const rawUrl = $('video-url').value.trim();
   if (rawUrl && rawUrl !== exampleURL) {
-    const chosenType = $('source-type').value === 'auto' ? 'auto' : 'dash';
+    const chosenType = $('source-type').value === 'auto' ? 'auto' : (source?.type || 'auto');
     loadSource(rawUrl, chosenType, $('live-stream').checked);
   } else if (source) {
     updateFormatBadge();

@@ -62,7 +62,7 @@
             </button>
             <button id="open-protection-config" class="config-pill-button" type="button" title="Enter decryption keys (KID:KEY) or license URL, request headers and robustness level">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-              <span>DASH Protection</span>
+              <span>Protection</span>
               <span id="protection-active-badge" class="pill-badge" hidden>ON</span>
             </button>
           </div>
@@ -160,8 +160,8 @@
       <article class="feature-card" id="dash-protection-card">
         <div class="feature-card-header">
           <div>
-            <span class="feature-tag">PROTECTED .MPD STREAMS</span>
-            <h2>DASH Protection</h2>
+            <span class="feature-tag">PROTECTED DASH &amp; HLS STREAMS</span>
+            <h2>Stream Protection</h2>
             <p>Key in decryption keys (<code>KID:KEY</code> pairs) or enter a license URL, request headers, and robustness level when a protected stream needs it. Configurations can be remembered per host and shared via link.</p>
           </div>
           <button id="card-open-protection" class="secondary-action-button" type="button">+ Configure Protection</button>
@@ -261,13 +261,13 @@
     </div>
   </div>
 
-  <!-- DASH Protection Modal -->
+  <!-- Stream Protection Modal -->
   <div id="protection-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="protection-modal-title" hidden>
     <div class="modal-panel">
       <div class="modal-header">
         <div>
-          <h2 id="protection-modal-title" class="modal-title">DASH Protection</h2>
-          <p class="modal-subtitle">Key in decryption keys (<code>KID:KEY</code> pairs) to decrypt directly in the browser, or enter a license server URL.</p>
+          <h2 id="protection-modal-title" class="modal-title">Stream Protection</h2>
+          <p class="modal-subtitle">Key in decryption keys (<code>KID:KEY</code> pairs) for DASH (.mpd) or HLS (.m3u8), or enter a license server URL.</p>
         </div>
         <button id="protection-close-x" class="modal-close-x" type="button" aria-label="Close dialog">✕</button>
       </div>

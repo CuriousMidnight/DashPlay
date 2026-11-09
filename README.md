@@ -11,10 +11,10 @@ DashPlay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DA
 - **Per-site headers**:
   - Save custom request headers (such as `Referer`, `Origin`, `Authorization`, or custom token headers) per stream host (matching the host and its subdomains) for streams that otherwise return `403 Forbidden` errors.
   - Applied to HLS (`hls.js`), DASH (`dash.js`), FLV (`mpegts.js`), and Live MP4 (`fetch`) requests, and persisted locally in `localStorage`.
-- **DASH Protection**:
-  - Key in **Decryption Keys (`KID:KEY`)** (one or more comma- or newline-separated 128-bit hex `KID:KEY` pairs) to decrypt and play encrypted `.mpd` streams directly in the browser via W3C ClearKey (`org.w3.clearkey`) without a license server.
+- **Stream Protection (DASH & HLS)**:
+  - Key in **Decryption Keys (`KID:KEY`)** (one or more comma- or newline-separated 128-bit hex `KID:KEY` pairs) to decrypt and play encrypted `.mpd` and `.m3u8` streams directly in the browser via W3C ClearKey (`org.w3.clearkey`) without a license server.
   - Or enter a **License URL**, optional **License Request Headers**, and **Robustness Level** (e.g. `SW_SECURE_DECODE`, `SW_SECURE_CRYPTO`, `HW_SECURE_DECODE`) when a license server is used.
-  - Automatically prompts when an encrypted DASH stream encounters a key-system or protection error, and optionally remembers configurations per stream host.
+  - Automatically prompts when an encrypted stream encounters a key-system or protection error, and optionally remembers configurations per stream host.
 - **Shareable links for friends**:
   - Click **Copy shareable link** to generate a single link containing the stream URL, format, per-site request headers, and DASH Protection configuration:
     - **Admin Only** (`?s=<slug>`) — Ultra-short preset links backed by `streams.json` in your GitHub repository (with one-click GitHub Auto-Sync for the repository owner).

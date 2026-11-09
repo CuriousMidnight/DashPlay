@@ -255,6 +255,18 @@ export function clearKeysToDashMap(clearKeys) {
   return Object.keys(out).length ? out : null;
 }
 
+export function createClearKeyJwkBuffer(clearKeys) {
+  const clean = sanitizeClearKeys(clearKeys);
+  if (!clean) return null;
+  const keys = Object.entries(clean).map(([kidHex, keyHex]) => ({
+    kty: 'oct',
+    k: hexToBase64Url(keyHex),
+    kid: hexToBase64Url(kidHex),
+  }));
+  const jwkString = JSON.stringify({ keys, type: 'temporary' });
+  return new TextEncoder().encode(jwkString).buffer;
+}
+
 export function rewriteMpdForClearKey(xmlText, defaultKidHex = '') {
   if (typeof xmlText !== 'string' || !xmlText.includes('<MPD')) return xmlText;
   const fallbackKidUuid = defaultKidHex ? formatUuidKid(defaultKidHex) : '';
