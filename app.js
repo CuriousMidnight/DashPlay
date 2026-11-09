@@ -6,10 +6,13 @@ import {
   normalizeHost,
   formatHeaderLines,
   sanitizeHeaders,
+  parseClearKeys,
+  formatClearKeys,
+  clearKeysToDashMap,
+  rewriteMpdForClearKey,
   sanitizeProtectionConfig,
   readSource,
   parseShareableInput,
-  createPlayerLink,
   createCompactPlayerLink,
   createAliasPlayerLink,
   loadRepoStreams,
@@ -174,7 +177,7 @@ function updateConfigPills() {
   $('headers-count-badge').textContent = String(headerCount);
 
   const activeProtection = !isExample ? resolveStreamProtection(url) : null;
-  const hasProtection = Boolean(activeProtection?.licenseUrl);
+  const hasProtection = Boolean(activeProtection?.licenseUrl || activeProtection?.clearKeys);
   $('open-protection-config').dataset.active = String(hasProtection);
   $('protection-active-badge').hidden = !hasProtection;
 }
@@ -241,14 +244,15 @@ function renderSavedRulesLists() {
 
   const protectionList = $('saved-protection-list');
   const savedProtection = listSavedProtectionConfigs();
-  if (!savedProtection.length && !customSessionProtection?.licenseUrl) {
+  const hasCustomSessionProt = Boolean(customSessionProtection?.licenseUrl || customSessionProtection?.clearKeys);
+  if (!savedProtection.length && !hasCustomSessionProt) {
     const empty = document.createElement('p');
     empty.className = 'saved-rule-empty';
     empty.textContent = 'No DASH Protection configurations saved yet. Click "+ Configure Protection" when playing encrypted .mpd streams.';
     protectionList.replaceChildren(empty);
   } else {
     const items = [...savedProtection];
-    if (customSessionProtection?.licenseUrl) {
+    if (hasCustomSessionProt) {
       const host = currentTargetHost() || 'Current stream';
       if (!items.some((entry) => entry.host === host)) {
         items.unshift({ host, config: customSessionProtection, sessionOnly: true });
@@ -264,15 +268,28 @@ function renderSavedRulesLists() {
       hostEl.className = 'saved-rule-host';
       hostEl.textContent = host;
 
+      const keyCount = config.clearKeys ? Object.keys(config.clearKeys).length : 0;
       const pill = document.createElement('span');
       pill.className = 'saved-rule-pill';
-      pill.textContent = config.robustness || 'Protection';
+      pill.textContent = keyCount
+        ? `${keyCount} ClearKey${keyCount === 1 ? '' : 's'}`
+        : (config.robustness || 'Protection');
       hostEl.appendChild(pill);
 
       const detail = document.createElement('pre');
       detail.className = 'saved-rule-detail';
+      const detailLines = [];
+      if (keyCount) {
+        detailLines.push(`Keys: ${formatClearKeys(config.clearKeys, ', ')}`);
+      }
+      if (config.licenseUrl) {
+        detailLines.push(`License: ${config.licenseUrl}`);
+      }
       const hdrCount = config.headers ? Object.keys(config.headers).length : 0;
-      detail.textContent = `License: ${config.licenseUrl}${hdrCount ? `\nHeaders: ${ Object.keys(config.headers).join(', ') }` : ''}`;
+      if (hdrCount) {
+        detailLines.push(`Headers: ${Object.keys(config.headers).join(', ')}`);
+      }
+      detail.textContent = detailLines.join('\n');
       info.append(hostEl, detail);
 
       const actions = document.createElement('div');
@@ -425,23 +442,13 @@ function buildShareSource() {
   };
 }
 
-function getBestSelfContainedMode(shareable) {
-  if (!shareable) return 'compact';
-  const compactLink = createCompactPlayerLink(location.href, shareable);
-  const fullLink = createPlayerLink(location.href, shareable);
-  return compactLink.length <= fullLink.length ? 'compact' : 'full';
-}
-
 function getDisplayedShareUrl(shareable) {
   if (!shareable) return '';
-  if (shareLinkMode === 'full') return createPlayerLink(location.href, shareable);
   if (shareLinkMode === 'compact') return createCompactPlayerLink(location.href, shareable);
   if (currentAliasSlug && (currentAliasInRepo || shareLinkModeManual)) {
     return createAliasPlayerLink(location.href, currentAliasSlug);
   }
-  return getBestSelfContainedMode(shareable) === 'full'
-    ? createPlayerLink(location.href, shareable)
-    : createCompactPlayerLink(location.href, shareable);
+  return createCompactPlayerLink(location.href, shareable);
 }
 
 function syncShareModeButtons() {
@@ -468,7 +475,7 @@ function updateAliasStatusUI(customMsg = '') {
     statusEl.textContent = 'Click "Save to GitHub" to commit this ?s= link to streams.json';
   } else {
     statusEl.dataset.inRepo = 'false';
-    statusEl.textContent = 'Click "Auto-Sync Settings" to auto-save to GitHub streams.json, or use Compact (?z=…)';
+    statusEl.textContent = 'Click "Auto-Sync Settings" to auto-save to GitHub streams.json, or use Normal (?z=…)';
   }
 }
 
@@ -523,7 +530,7 @@ async function syncLocalAliasForCurrentSource({ replaceAddress = true, preferred
   }
   const ghCfg = loadGithubSyncConfig();
   if (!shareLinkModeManual) {
-    shareLinkMode = currentAliasInRepo ? 'alias' : getBestSelfContainedMode(shareable);
+    shareLinkMode = currentAliasInRepo ? 'alias' : 'compact';
   }
   syncShareModeButtons();
   updateAliasStatusUI();
@@ -569,7 +576,13 @@ function refreshSharePanel() {
   if (hdrCount > 0) {
     tags.push({ label: 'Per-site headers', value: `${hdrCount} included` });
   }
-  if (shareable.protection?.licenseUrl) {
+  const keyCount = shareable.protection?.clearKeys ? Object.keys(shareable.protection.clearKeys).length : 0;
+  if (keyCount > 0) {
+    tags.push({
+      label: 'DASH Protection',
+      value: `${keyCount} ClearKey${keyCount === 1 ? '' : 's'} included`,
+    });
+  } else if (shareable.protection?.licenseUrl) {
     tags.push({
       label: 'DASH Protection',
       value: shareable.protection.robustness ? `License + ${shareable.protection.robustness}` : 'License URL included',
@@ -591,7 +604,9 @@ function updateFormatBadge() {
   const base = FORMAT_LABELS[source.type] || source.type.toUpperCase();
   const parts = [base];
   if (source.live) parts.push('LIVE');
-  if (source.type === 'dash' && resolveStreamProtection(source.url)?.licenseUrl) parts.push('PROTECTED');
+  const activeProt = source.type === 'dash' ? resolveStreamProtection(source.url) : null;
+  if (activeProt?.clearKeys) parts.push('CLEARKEY');
+  else if (activeProt?.licenseUrl) parts.push('PROTECTED');
   if (resolveStreamHeaders(source.url, customSessionHeaders)) parts.push('HEADERS');
   $('format-badge').textContent = parts.join(' · ');
 }
@@ -610,7 +625,7 @@ function loadSource(raw, selected, live, { updateURL = true, example = false, in
           if (!resolved?.url) {
             fail(
               `Preset "${embeddedShare.aliasSlug}" not found`,
-              `Could not find "${embeddedShare.aliasSlug}" in your browser storage or streams.json. Use the Compact (?z=…) or Standard (?url=…) link instead.`,
+              `Could not find "${embeddedShare.aliasSlug}" in your browser storage or streams.json. Use the Normal (?z=…) link instead.`,
             );
             return;
           }
@@ -890,10 +905,24 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
     engine = player;
     dashEngine = player;
 
+    const clearKeys = effectiveProtection?.clearKeys && Object.keys(effectiveProtection.clearKeys).length
+      ? effectiveProtection.clearKeys
+      : null;
+    const dashClearKeys = clearKeys ? clearKeysToDashMap(clearKeys) : null;
+
     player.updateSettings({
       debug: { logLevel: dashjs.Debug?.LOG_LEVEL_NONE ?? 0 },
       streaming: {
         abr: { autoSwitchBitrate: { video: true } },
+        ...(dashClearKeys ? {
+          protection: {
+            ignoreEmeEncryptedEvent: true,
+            ignoreKeyStatuses: true,
+          },
+          capabilities: {
+            useMediaCapabilitiesApi: false,
+          },
+        } : {}),
       },
     });
 
@@ -905,6 +934,16 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
       return Promise.resolve(request);
     });
 
+    if (dashClearKeys) {
+      const firstKidHex = Object.keys(clearKeys)[0] || '';
+      player.addResponseInterceptor((response) => {
+        if (typeof response?.data === 'string' && response.data.includes('<MPD')) {
+          response.data = rewriteMpdForClearKey(response.data, firstKidHex);
+        }
+        return Promise.resolve(response);
+      });
+    }
+
     player.registerLicenseRequestFilter((request) => {
       const siteHdrs = getEffectiveHeaders(request.url, url, customSessionHeaders || effectiveHeaders);
       const protCfg = resolveStreamProtection(url) || effectiveProtection;
@@ -915,7 +954,15 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
       return Promise.resolve();
     });
 
-    if (effectiveProtection?.licenseUrl) {
+    if (dashClearKeys) {
+      player.setProtectionData({
+        'org.w3.clearkey': {
+          clearkeys: dashClearKeys,
+          initDataTypes: ['keyids', 'cenc'],
+          priority: 0,
+        },
+      });
+    } else if (effectiveProtection?.licenseUrl) {
       const protData = { serverURL: effectiveProtection.licenseUrl, priority: 1 };
       if (effectiveProtection.headers && Object.keys(effectiveProtection.headers).length) {
         protData.httpRequestHeaders = effectiveProtection.headers;
@@ -944,7 +991,7 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
         const protText = getProtectionErrorText(event).slice(0, 400);
         fail(
           'Encrypted DASH stream requires Protection',
-          'Enter a license URL, optional request headers, and robustness level to play this encrypted .mpd stream.',
+          'Key in decryption keys (KID:KEY pairs) or enter a license URL, optional request headers, and robustness level to play this encrypted .mpd stream.',
           { showProtectionAction: true },
         );
         if (!protectionPrompting) {
@@ -1135,13 +1182,17 @@ function openProtectionModal({ detectedError = '', prefill = null, host = '' } =
     banner.textContent = '';
   }
 
+  $('protection-clearkeys').value = initial?.clearKeys ? formatClearKeys(initial.clearKeys, ', ') : '';
   $('protection-license-url').value = initial?.licenseUrl || '';
   $('protection-robustness').value = initial?.robustness || '';
   populateHeaderRows($('protection-header-rows'), initial?.headers, ['', '']);
   $('protection-include-share').checked = includeProtectionInShare;
   $('protection-error').hidden = true;
   $('protection-modal').hidden = false;
-  setTimeout(() => $('protection-license-url').focus(), 0);
+  setTimeout(() => {
+    if (initial?.licenseUrl && !initial?.clearKeys) $('protection-license-url').focus();
+    else $('protection-clearkeys').focus();
+  }, 0);
 }
 
 function closeProtectionModal() {
@@ -1208,21 +1259,46 @@ $('protection-clear').addEventListener('click', () => {
 
 $('protection-apply').addEventListener('click', () => {
   $('protection-error').hidden = true;
-  const licenseUrl = $('protection-license-url').value.trim();
-  if (!licenseUrl) {
-    $('protection-error').textContent = 'Enter a Protection license URL (HTTP or HTTPS).';
+  let rawClearKeys = $('protection-clearkeys').value.trim();
+  let licenseUrl = $('protection-license-url').value.trim();
+
+  // If the user pasted KID:KEY pairs into the License URL input, handle it gracefully
+  if (!rawClearKeys && licenseUrl && !/^https?:\/\//i.test(licenseUrl) && licenseUrl.includes(':')) {
+    rawClearKeys = licenseUrl;
+    licenseUrl = '';
+    $('protection-clearkeys').value = rawClearKeys;
+    $('protection-license-url').value = '';
+  }
+
+  let clearKeys = null;
+  if (rawClearKeys) {
+    const parsedKeys = parseClearKeys(rawClearKeys);
+    if (parsedKeys.errors.length) {
+      $('protection-error').textContent = parsedKeys.errors[0];
+      $('protection-error').hidden = false;
+      $('protection-clearkeys').focus();
+      return;
+    }
+    clearKeys = parsedKeys.clearKeys;
+  }
+
+  if (!clearKeys && !licenseUrl) {
+    $('protection-error').textContent = 'Enter decryption keys (KID:KEY pairs) or a Protection license URL (HTTP/HTTPS).';
     $('protection-error').hidden = false;
-    $('protection-license-url').focus();
+    $('protection-clearkeys').focus();
     return;
   }
-  try {
-    const parsed = new URL(licenseUrl);
-    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Invalid protocol');
-  } catch {
-    $('protection-error').textContent = 'Enter a valid HTTP or HTTPS Protection license URL.';
-    $('protection-error').hidden = false;
-    $('protection-license-url').focus();
-    return;
+
+  if (licenseUrl) {
+    try {
+      const parsed = new URL(licenseUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Invalid protocol');
+    } catch {
+      $('protection-error').textContent = 'Enter a valid HTTP or HTTPS Protection license URL.';
+      $('protection-error').hidden = false;
+      $('protection-license-url').focus();
+      return;
+    }
   }
 
   const { headers, errors } = readHeaderRows($('protection-header-rows'));
@@ -1237,9 +1313,10 @@ $('protection-apply').addEventListener('click', () => {
   includeProtectionInShare = $('protection-include-share').checked;
 
   const config = sanitizeProtectionConfig({
-    licenseUrl,
+    licenseUrl: licenseUrl || undefined,
     headers,
     robustness,
+    clearKeys,
   });
 
   customSessionProtection = config;
@@ -1558,7 +1635,7 @@ async function restoreLocation() {
     if (!resolved?.url) {
       fail(
         `Preset "${matchedSlug}" not found`,
-        `Could not find "${matchedSlug}" in your browser storage or streams.json. Ask your friend for the Compact (?z=…) link or add "${matchedSlug}" to streams.json.`,
+        `Could not find "${matchedSlug}" in your browser storage or streams.json. Ask your friend for the Normal (?z=…) link or add "${matchedSlug}" to streams.json.`,
       );
       return;
     }

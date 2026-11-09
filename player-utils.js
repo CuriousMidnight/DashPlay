@@ -121,25 +121,246 @@ export const formatHeaderLines = (headers) =>
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n');
 
+export function formatUuidKid(hex32) {
+  const clean = String(hex32 || '').replace(/-/g, '').toLowerCase();
+  if (clean.length !== 32) return clean;
+  return `${clean.slice(0, 8)}-${clean.slice(8, 12)}-${clean.slice(12, 16)}-${clean.slice(16, 20)}-${clean.slice(20, 32)}`;
+}
+
+export function normalizeKeyHex(token) {
+  if (typeof token !== 'string') return null;
+  const trimmed = token.trim().replace(/^["']|["']$/g, '');
+  if (!trimmed) return null;
+  const unhyphenated = trimmed.replace(/-/g, '');
+  if (/^[0-9a-fA-F]{32}$/.test(unhyphenated)) {
+    return unhyphenated.toLowerCase();
+  }
+  if (/^[A-Za-z0-9+/_-]{22,24}={0,2}$/.test(trimmed)) {
+    try {
+      const bytes = base64UrlToBytes(trimmed);
+      if (bytes.length === 16) {
+        return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function parseClearKeys(raw) {
+  const clearKeys = {};
+  const errors = [];
+  if (!raw) return { clearKeys: null, errors };
+
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    if (Array.isArray(raw.keys)) {
+      for (const item of raw.keys) {
+        const kid = normalizeKeyHex(item?.kid || item?.keyId || item?.kId);
+        const key = normalizeKeyHex(item?.k || item?.key);
+        if (kid && key) clearKeys[kid] = key;
+      }
+    } else {
+      for (const [k, v] of Object.entries(raw)) {
+        const kid = normalizeKeyHex(k);
+        const key = normalizeKeyHex(String(v ?? ''));
+        if (kid && key) clearKeys[kid] = key;
+      }
+    }
+    return {
+      clearKeys: Object.keys(clearKeys).length ? clearKeys : null,
+      errors,
+    };
+  }
+
+  const text = String(raw).trim();
+  if (!text) return { clearKeys: null, errors };
+
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      const res = parseClearKeys(parsed);
+      if (res.clearKeys) return res;
+      errors.push('JSON did not contain valid 128-bit KID:KEY pairs.');
+      return { clearKeys: null, errors };
+    } catch {
+      errors.push('Invalid JSON format for decryption keys.');
+      return { clearKeys: null, errors };
+    }
+  }
+
+  const cleaned = text.replace(/(?:^|\s)--?(?:keys?|clearkeys?)(?=\s|$)/gi, ' ');
+  const tokens = cleaned
+    .split(/[\r\n,;]+|\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  tokens.forEach((token, idx) => {
+    const sepIndex = token.indexOf(':') !== -1 ? token.indexOf(':') : token.indexOf('=');
+    if (sepIndex <= 0) {
+      errors.push(`Key #${idx + 1} ("${token.slice(0, 36)}"): expected KID:KEY format.`);
+      return;
+    }
+    const rawKid = token.slice(0, sepIndex).trim();
+    const rawKey = token.slice(sepIndex + 1).trim();
+    const kid = normalizeKeyHex(rawKid);
+    const key = normalizeKeyHex(rawKey);
+    if (!kid) {
+      errors.push(`Key #${idx + 1}: invalid 32-char hex KID "${rawKid}".`);
+      return;
+    }
+    if (!key) {
+      errors.push(`Key #${idx + 1}: invalid 32-char hex KEY "${rawKey}".`);
+      return;
+    }
+    clearKeys[kid] = key;
+  });
+
+  return {
+    clearKeys: Object.keys(clearKeys).length ? clearKeys : null,
+    errors,
+  };
+}
+
+export function sanitizeClearKeys(raw) {
+  const { clearKeys, errors } = parseClearKeys(raw);
+  if (errors.length && !clearKeys) return null;
+  return clearKeys;
+}
+
+export function formatClearKeys(clearKeys, separator = ', ') {
+  const clean = sanitizeClearKeys(clearKeys);
+  if (!clean) return '';
+  return Object.entries(clean)
+    .map(([kid, key]) => `${kid}:${key}`)
+    .join(separator);
+}
+
+export function hexToBase64Url(hex32) {
+  const clean = String(hex32 || '').replace(/-/g, '').toLowerCase();
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytesToBase64Url(bytes);
+}
+
+export function clearKeysToDashMap(clearKeys) {
+  const clean = sanitizeClearKeys(clearKeys);
+  if (!clean) return null;
+  const out = {};
+  for (const [kidHex, keyHex] of Object.entries(clean)) {
+    out[hexToBase64Url(kidHex)] = hexToBase64Url(keyHex);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export function rewriteMpdForClearKey(xmlText, defaultKidHex = '') {
+  if (typeof xmlText !== 'string' || !xmlText.includes('<MPD')) return xmlText;
+  const fallbackKidUuid = defaultKidHex ? formatUuidKid(defaultKidHex) : '';
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length > 0) return xmlText;
+
+    const mpdEl = doc.documentElement;
+    if (mpdEl && !mpdEl.getAttribute('xmlns:cenc')) {
+      mpdEl.setAttribute('xmlns:cenc', 'urn:mpeg:cenc:2013');
+    }
+    const ns = mpdEl?.namespaceURI || 'urn:mpeg:dash:schema:mpd:2011';
+
+    const allElements = Array.from(doc.getElementsByTagName('*'));
+    const allContentProtections = allElements.filter((el) => el.localName === 'ContentProtection');
+    const hadAnyProtection = allContentProtections.length > 0;
+
+    const adaptationSets = allElements.filter((el) => el.localName === 'AdaptationSet');
+
+    adaptationSets.forEach((asEl) => {
+      const contentType = (asEl.getAttribute('contentType') || '').toLowerCase();
+      const mimeType = (asEl.getAttribute('mimeType') || '').toLowerCase();
+      if (contentType === 'text' || contentType === 'image' || mimeType.startsWith('text/') || mimeType.startsWith('image/')) {
+        return;
+      }
+
+      const subtreeElements = [asEl, ...Array.from(asEl.getElementsByTagName('*'))];
+      const cpInSubtree = subtreeElements.filter((el) => el.localName === 'ContentProtection');
+      if (hadAnyProtection && cpInSubtree.length === 0) return;
+
+      let detectedKid = '';
+      for (const cp of cpInSubtree) {
+        const kidAttr =
+          cp.getAttribute('cenc:default_KID') ||
+          cp.getAttributeNS('urn:mpeg:cenc:2013', 'default_KID') ||
+          cp.getAttribute('default_KID');
+        if (kidAttr) {
+          detectedKid = formatUuidKid(kidAttr);
+          break;
+        }
+      }
+      const targetKidUuid = detectedKid || fallbackKidUuid;
+
+      cpInSubtree.forEach((cp) => {
+        if (cp.parentNode) cp.parentNode.removeChild(cp);
+      });
+
+      const firstChild = asEl.firstChild;
+      const mp4Cp = doc.createElementNS(ns, 'ContentProtection');
+      mp4Cp.setAttribute('schemeIdUri', 'urn:mpeg:dash:mp4protection:2011');
+      mp4Cp.setAttribute('value', 'cenc');
+      if (targetKidUuid) {
+        mp4Cp.setAttribute('cenc:default_KID', targetKidUuid);
+      }
+      asEl.insertBefore(mp4Cp, firstChild);
+
+      const ckCp = doc.createElementNS(ns, 'ContentProtection');
+      ckCp.setAttribute('schemeIdUri', 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e');
+      ckCp.setAttribute('value', 'ClearKey1.0');
+      asEl.insertBefore(ckCp, firstChild);
+    });
+
+    const remainingCps = Array.from(doc.getElementsByTagName('*')).filter((el) => el.localName === 'ContentProtection');
+    remainingCps.forEach((cp) => {
+      const scheme = (cp.getAttribute('schemeIdUri') || '').toLowerCase();
+      if (
+        scheme !== 'urn:mpeg:dash:mp4protection:2011' &&
+        scheme !== 'urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e'
+      ) {
+        if (cp.parentNode) cp.parentNode.removeChild(cp);
+      }
+    });
+
+    return new XMLSerializer().serializeToString(doc);
+  } catch {
+    return xmlText;
+  }
+}
+
 export function sanitizeProtectionConfig(config) {
   if (!config || typeof config !== 'object') return null;
   const rawUrl = config.licenseUrl || config[atob('d2lkZXZpbmVMaWNlbnNlVXJs')];
-  const licenseUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
-  if (!licenseUrl) return null;
-  try {
-    const parsed = new URL(licenseUrl);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-  } catch {
-    return null;
+  let licenseUrl = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (licenseUrl) {
+    try {
+      const parsed = new URL(licenseUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) licenseUrl = '';
+    } catch {
+      licenseUrl = '';
+    }
   }
+  const clearKeys = sanitizeClearKeys(
+    config.clearKeys || config.clearkeys || config.keys || config.key,
+  );
+  if (!licenseUrl && !clearKeys) return null;
+
   const headers = sanitizeHeaders(config.headers);
   const robustness = typeof config.robustness === 'string' && config.robustness.trim()
     ? config.robustness.trim()
     : undefined;
   return {
-    licenseUrl,
-    headers,
+    ...(licenseUrl ? { licenseUrl } : {}),
+    ...(headers ? { headers } : {}),
     ...(robustness ? { robustness } : {}),
+    ...(clearKeys ? { clearKeys } : {}),
   };
 }
 
@@ -232,6 +453,50 @@ function unpackHeaderMap(packed, blobs) {
   return sanitizeHeaders(out);
 }
 
+function packClearKeys(clearKeys, blobs) {
+  const clean = sanitizeClearKeys(clearKeys);
+  if (!clean) return undefined;
+  const entries = Object.entries(clean);
+  if (!entries.length) return undefined;
+  const bytes = new Uint8Array(entries.length * 32);
+  let offset = 0;
+  for (const [kidHex, keyHex] of entries) {
+    for (let i = 0; i < 32; i += 2) {
+      bytes[offset++] = parseInt(kidHex.slice(i, i + 2), 16);
+    }
+    for (let i = 0; i < 32; i += 2) {
+      bytes[offset++] = parseInt(keyHex.slice(i, i + 2), 16);
+    }
+  }
+  const blobIdx = blobs.length;
+  blobs.push(bytes);
+  return blobIdx;
+}
+
+function unpackClearKeys(packed, blobs) {
+  if (typeof packed === 'number' && blobs[packed]) {
+    const bytes = blobs[packed];
+    if (bytes.length < 32 || bytes.length % 32 !== 0) return null;
+    const out = {};
+    for (let offset = 0; offset + 32 <= bytes.length; offset += 32) {
+      let kidHex = '';
+      let keyHex = '';
+      for (let i = 0; i < 16; i++) {
+        kidHex += bytes[offset + i].toString(16).padStart(2, '0');
+      }
+      for (let i = 16; i < 32; i++) {
+        keyHex += bytes[offset + i].toString(16).padStart(2, '0');
+      }
+      out[kidHex] = keyHex;
+    }
+    return sanitizeClearKeys(out);
+  }
+  if (packed && (typeof packed === 'string' || typeof packed === 'object')) {
+    return sanitizeClearKeys(packed);
+  }
+  return null;
+}
+
 export function encodeCompactPacket(source) {
   const blobs = [];
   let autoDetected = null;
@@ -248,10 +513,12 @@ export function encodeCompactPacket(source) {
   if (packedHeaders) meta.h = packedHeaders;
 
   if (cleanProt) {
-    meta.l = cleanProt.licenseUrl;
+    if (cleanProt.licenseUrl) meta.l = cleanProt.licenseUrl;
     if (cleanProt.robustness) meta.r = cleanProt.robustness;
     const packedProtHeaders = packHeaderMap(cleanProt.headers, blobs);
     if (packedProtHeaders) meta.d = packedProtHeaders;
+    const packedKeys = packClearKeys(cleanProt.clearKeys, blobs);
+    if (packedKeys !== undefined) meta.k = packedKeys;
   }
 
   const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
@@ -301,11 +568,13 @@ export function decodeCompactPacket(encoded) {
     const url = typeof meta.u === 'string' ? meta.u : '';
     const type = SUPPORTED_FORMATS.includes(meta.t) ? meta.t : 'auto';
     const headers = unpackHeaderMap(meta.h, blobs);
-    const protection = meta.l
+    const clearKeys = unpackClearKeys(meta.k, blobs);
+    const protection = (meta.l || clearKeys)
       ? sanitizeProtectionConfig({
-          licenseUrl: meta.l,
+          licenseUrl: meta.l || undefined,
           robustness: meta.r || undefined,
           headers: unpackHeaderMap(meta.d, blobs),
+          clearKeys,
         })
       : null;
 
@@ -342,16 +611,30 @@ export function readSource(search, hash = '') {
   const rawHeaders = params.get('headers') || params.get('h');
   const headers = rawHeaders ? sanitizeHeaders(decodeShareData(rawHeaders)) : null;
 
+  const rawClearKeyParam =
+    params.get('key') ||
+    params.get('keys') ||
+    params.get('clearkey') ||
+    params.get('clearkeys') ||
+    hashParams.get('key') ||
+    hashParams.get('keys') ||
+    '';
+
   let protection = null;
   const rawProt = params.get('protection') || params.get(atob('ZHJt'));
   if (rawProt) {
-    protection = sanitizeProtectionConfig(decodeShareData(rawProt));
-  } else if (params.get('license')) {
+    const decodedProt = decodeShareData(rawProt);
+    protection = sanitizeProtectionConfig({
+      ...(decodedProt && typeof decodedProt === 'object' ? decodedProt : {}),
+      ...(rawClearKeyParam ? { clearKeys: rawClearKeyParam } : {}),
+    });
+  } else if (params.get('license') || rawClearKeyParam) {
     const rawProtHeaders = params.get('protectionHeaders') || params.get(atob('ZHJtSGVhZGVycw=='));
     protection = sanitizeProtectionConfig({
-      licenseUrl: params.get('license'),
+      licenseUrl: params.get('license') || undefined,
       headers: rawProtHeaders ? decodeShareData(rawProtHeaders) : null,
       robustness: params.get('robustness') || undefined,
+      clearKeys: rawClearKeyParam || undefined,
     });
   }
 
@@ -419,7 +702,8 @@ export function createPlayerLink(page, source) {
 
   const cleanProt = sanitizeProtectionConfig(source.protection);
   if (cleanProt) {
-    link.searchParams.set('license', cleanProt.licenseUrl);
+    if (cleanProt.clearKeys) link.searchParams.set('key', formatClearKeys(cleanProt.clearKeys, ','));
+    if (cleanProt.licenseUrl) link.searchParams.set('license', cleanProt.licenseUrl);
     if (cleanProt.robustness) link.searchParams.set('robustness', cleanProt.robustness);
     if (cleanProt.headers) link.searchParams.set('protectionHeaders', encodeShareData(cleanProt.headers));
   }

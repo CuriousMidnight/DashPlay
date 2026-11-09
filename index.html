@@ -60,7 +60,7 @@
               <span>Per-site headers</span>
               <span id="headers-count-badge" class="pill-badge" hidden>0</span>
             </button>
-            <button id="open-protection-config" class="config-pill-button" type="button" title="Enter license URL, request headers and robustness level">
+            <button id="open-protection-config" class="config-pill-button" type="button" title="Enter decryption keys (KID:KEY) or license URL, request headers and robustness level">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
               <span>DASH Protection</span>
               <span id="protection-active-badge" class="pill-badge" hidden>ON</span>
@@ -121,8 +121,7 @@
           <label for="share-url">Shareable link (100% local):</label>
           <div class="share-mode-group" role="group" aria-label="Link style">
             <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="false" title="Short link using local storage &amp; streams.json in your GitHub Pages repo (?s=...)">Admin Only</button>
-            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="true" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
-            <button id="share-mode-full" class="preset-chip" type="button" data-share-mode="full" aria-pressed="false" title="Readable URL with all query parameters (?url=...)">Standard (?url=…)</button>
+            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="true" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Normal</button>
           </div>
           <input id="share-url" readonly type="text" aria-label="Shareable player link">
           <button id="copy-share-again" class="primary-button share-copy-btn" type="button">Copy</button>
@@ -163,7 +162,7 @@
           <div>
             <span class="feature-tag">PROTECTED .MPD STREAMS</span>
             <h2>DASH Protection</h2>
-            <p>Enter a license URL, request headers and robustness level when a protected stream needs it. Configurations can be remembered per host and shared via link.</p>
+            <p>Key in decryption keys (<code>KID:KEY</code> pairs) or enter a license URL, request headers, and robustness level when a protected stream needs it. Configurations can be remembered per host and shared via link.</p>
           </div>
           <button id="card-open-protection" class="secondary-action-button" type="button">+ Configure Protection</button>
         </div>
@@ -182,7 +181,7 @@
         <article>
           <span class="step-number">02</span>
           <h3>Add headers or Protection</h3>
-          <p>Save per-site request headers for streams that return 403 errors, or enter a license URL, headers, and robustness level for protected DASH streams.</p>
+          <p>Save per-site request headers for streams that return 403 errors, or enter decryption keys (<code>KID:KEY</code>) or a license URL for protected DASH streams.</p>
         </article>
         <article>
           <span class="step-number">03</span>
@@ -268,7 +267,7 @@
       <div class="modal-header">
         <div>
           <h2 id="protection-modal-title" class="modal-title">DASH Protection</h2>
-          <p class="modal-subtitle">Enter a license URL, request headers and robustness level when a protected stream needs it.</p>
+          <p class="modal-subtitle">Key in decryption keys (<code>KID:KEY</code> pairs) to decrypt directly in the browser, or enter a license server URL.</p>
         </div>
         <button id="protection-close-x" class="modal-close-x" type="button" aria-label="Close dialog">✕</button>
       </div>
@@ -277,7 +276,17 @@
         <p id="protection-detected-message" class="protection-detected-banner" hidden></p>
 
         <label class="modal-field">
-          <span class="field-label">Protection License URL</span>
+          <div class="field-label-row">
+            <span class="field-label">Decryption Keys (<code>KID:KEY</code> — ClearKey alternative)</span>
+          </div>
+          <textarea id="protection-clearkeys" rows="3" spellcheck="false" autocomplete="off" placeholder="8c7c60acae2e4f108606c740186ade96:bd24478ea9778c54f2213db72483b201, b0cc80dcdf1648339199dc53dafa9da1:2c0e29146217e49e1184689371ec3eb7"></textarea>
+          <span class="field-hint">Paste one or more <code>KID:KEY</code> hex pairs (comma- or newline-separated) to decrypt and watch directly without a license server.</span>
+        </label>
+
+        <div class="modal-divider"><span>OR USE A LICENSE SERVER</span></div>
+
+        <label class="modal-field">
+          <span class="field-label">Protection License URL (optional if keys are provided above)</span>
           <input id="protection-license-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://license.example.com/license">
         </label>
 
