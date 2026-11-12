@@ -383,7 +383,16 @@ export function sanitizeProtectionConfig(config) {
   const clearKeys = sanitizeClearKeys(
     config.clearKeys || config.clearkeys || config.keys || config.key,
   );
-  if (!licenseUrl && !clearKeys) return null;
+  const encryptedClearKeys =
+    config.encryptedClearKeys && typeof config.encryptedClearKeys === 'object' && config.encryptedClearKeys.data
+      ? {
+          v: Number(config.encryptedClearKeys.v) || 1,
+          salt: String(config.encryptedClearKeys.salt || ''),
+          iv: String(config.encryptedClearKeys.iv || ''),
+          data: String(config.encryptedClearKeys.data || ''),
+        }
+      : null;
+  if (!licenseUrl && !clearKeys && !encryptedClearKeys) return null;
 
   const headers = sanitizeHeaders(config.headers);
   const robustness = typeof config.robustness === 'string' && config.robustness.trim()
@@ -394,6 +403,7 @@ export function sanitizeProtectionConfig(config) {
     ...(headers ? { headers } : {}),
     ...(robustness ? { robustness } : {}),
     ...(clearKeys ? { clearKeys } : {}),
+    ...(encryptedClearKeys ? { encryptedClearKeys } : {}),
   };
 }
 

@@ -106,11 +106,102 @@ let customSessionProtection = null;
 let customSessionHeaders = null;
 let protectionPrompting = false;
 
-const CLEARKEY_PASSWORD = 'OOYqw7h9w94q';
+let sessionClearKeyPassword = '';
+const decryptedClearKeysCache = new Map();
 let unlockedProtectionHosts = new Set();
 let isClearKeyLocked = false;
 let pendingConfigArgs = null;
 let dashDecryptionWatchdog = null;
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function encryptClearKeys(clearKeysObj, password) {
+  if (!clearKeysObj || !password || typeof window === 'undefined' || !window.crypto?.subtle) return null;
+  const jsonStr = JSON.stringify(clearKeysObj);
+  const enc = new TextEncoder();
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+  const baseKey = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  );
+
+  const key = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    enc.encode(jsonStr),
+  );
+
+  return {
+    v: 1,
+    salt: arrayBufferToBase64(salt),
+    iv: arrayBufferToBase64(iv),
+    data: arrayBufferToBase64(ciphertext),
+  };
+}
+
+async function decryptClearKeys(encryptedPackage, password) {
+  if (!encryptedPackage || !password || typeof window === 'undefined' || !window.crypto?.subtle) return null;
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  const salt = base64ToArrayBuffer(encryptedPackage.salt);
+  const iv = base64ToArrayBuffer(encryptedPackage.iv);
+  const data = base64ToArrayBuffer(encryptedPackage.data);
+
+  const baseKey = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  );
+
+  const key = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt'],
+  );
+
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    data,
+  );
+
+  const text = dec.decode(decrypted);
+  return JSON.parse(text);
+}
 
 let screenshotFeedbackTimer = null;
 let screenshotFadeTimer = null;
@@ -223,7 +314,15 @@ function resolveStreamHeaders(url, overrideHeaders = null) {
 }
 
 function resolveStreamProtection(url, overrideProtection = null) {
-  return sanitizeProtectionConfig(overrideProtection) || sanitizeProtectionConfig(customSessionProtection) || getStoredProtectionConfig(url);
+  let host = null;
+  try { host = normalizeHost(new URL(url).hostname); } catch { host = normalizeHost(url); }
+  const hostKey = host || 'global';
+  const cached = hostKey ? decryptedClearKeysCache.get(hostKey) : null;
+  const resolved = sanitizeProtectionConfig(overrideProtection) || sanitizeProtectionConfig(customSessionProtection) || getStoredProtectionConfig(url);
+  if (resolved && !resolved.clearKeys && cached) {
+    resolved.clearKeys = cached;
+  }
+  return resolved;
 }
 
 function updateConfigPills() {
@@ -232,7 +331,7 @@ function updateConfigPills() {
   const activeHeaders = !isExample ? resolveStreamHeaders(url, customSessionHeaders) : null;
   const headerCount = activeHeaders ? Object.keys(activeHeaders).length : 0;
   const activeProtection = !isExample ? resolveStreamProtection(url) : null;
-  const hasProtection = Boolean(activeProtection?.licenseUrl || activeProtection?.clearKeys);
+  const hasProtection = Boolean(activeProtection?.licenseUrl || activeProtection?.clearKeys || activeProtection?.encryptedClearKeys);
 
   const configBtn = $('open-config');
   if (configBtn) {
@@ -296,13 +395,13 @@ function renderSavedRulesLists() {
       hostEl.appendChild(pill);
     }
 
-    if (protConfig?.clearKeys || protConfig?.licenseUrl) {
-      const keyCount = protConfig.clearKeys ? Object.keys(protConfig.clearKeys).length : 0;
+    if (protConfig?.clearKeys || protConfig?.encryptedClearKeys || protConfig?.licenseUrl) {
+      const keyCount = protConfig.clearKeys ? Object.keys(protConfig.clearKeys).length : (protConfig.encryptedClearKeys ? 'Encrypted' : 0);
       const protPill = document.createElement('span');
       protPill.className = 'saved-rule-pill';
-      protPill.textContent = keyCount
+      protPill.textContent = typeof keyCount === 'number' && keyCount > 0
         ? `${keyCount} ClearKey${keyCount === 1 ? '' : 's'}`
-        : (protConfig.robustness || 'DASH Protection');
+        : (keyCount === 'Encrypted' ? '🔒 ClearKey' : (protConfig.robustness || 'DASH Protection'));
       hostEl.appendChild(protPill);
     }
 
@@ -1256,9 +1355,10 @@ function closePasswordModal(openConfig = true) {
 function openConfigModal({ detectedError = '', prefill = null, host = '', bypassPassword = false } = {}) {
   const targetHost = normalizeHost(host) || currentTargetHost();
   const targetUrl = currentTargetUrl();
-  const initialProt = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(targetHost || targetUrl, { fallbackToLast: false });
-  const hasSavedClearKeys = Boolean(initialProt?.clearKeys && Object.keys(initialProt.clearKeys).length);
   const hostKey = targetHost || 'global';
+  const initialProt = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(targetHost || targetUrl, { fallbackToLast: false });
+  const cachedKeys = decryptedClearKeysCache.get(hostKey);
+  const hasSavedClearKeys = Boolean(cachedKeys || initialProt?.clearKeys || initialProt?.encryptedClearKeys);
 
   if (hasSavedClearKeys && !bypassPassword && !unlockedProtectionHosts.has(hostKey)) {
     promptClearKeyPassword({ detectedError, prefill, host, targetHost, initialProt });
@@ -1275,11 +1375,12 @@ function openConfigModal({ detectedError = '', prefill = null, host = '', bypass
   const lockStatusBtn = $('cfg-clearkey-lock-status');
   if (hasSavedClearKeys) {
     if (!isClearKeyLocked) {
-      $('cfg-clearkeys').value = formatClearKeys(initialProt.clearKeys, '\n');
+      const keysToShow = cachedKeys || initialProt?.clearKeys;
+      $('cfg-clearkeys').value = keysToShow ? formatClearKeys(keysToShow, '\n') : '';
       if (lockStatusBtn) {
         lockStatusBtn.style.display = 'inline-flex';
-        lockStatusBtn.textContent = '🔓 Unlocked';
-        lockStatusBtn.title = 'ClearKeys unlocked with password';
+        lockStatusBtn.textContent = '🔓 Unlocked (AES-GCM)';
+        lockStatusBtn.title = 'ClearKeys unlocked with AES-GCM decryption';
         lockStatusBtn.disabled = true;
       }
     } else {
@@ -1287,7 +1388,7 @@ function openConfigModal({ detectedError = '', prefill = null, host = '', bypass
       if (lockStatusBtn) {
         lockStatusBtn.style.display = 'inline-flex';
         lockStatusBtn.textContent = '🔒 Hidden (click to unlock)';
-        lockStatusBtn.title = 'Click to enter password and view keys';
+        lockStatusBtn.title = 'Click to enter password and decrypt keys';
         lockStatusBtn.disabled = false;
       }
     }
@@ -1337,16 +1438,33 @@ $('stream-config-modal')?.addEventListener('click', (event) => {
   if (event.target === $('stream-config-modal')) closeConfigModal();
 });
 
-$('pwd-modal-form')?.addEventListener('submit', (e) => {
+$('pwd-modal-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = $('clearkey-pwd-input');
   const err = $('clearkey-pwd-error');
   const entered = (input?.value || '').trim();
-  if (entered === CLEARKEY_PASSWORD) {
-    const hostKey = pendingConfigArgs?.targetHost || 'global';
-    unlockedProtectionHosts.add(hostKey);
-    closePasswordModal(true);
-  } else {
+  if (!entered) return;
+  const hostKey = pendingConfigArgs?.targetHost || 'global';
+  const prot = pendingConfigArgs?.initialProt;
+  const encryptedPkg = prot?.encryptedClearKeys;
+
+  try {
+    let decrypted = null;
+    if (encryptedPkg) {
+      decrypted = await decryptClearKeys(encryptedPkg, entered);
+    } else if (prot?.clearKeys) {
+      // First time encrypting existing legacy keys
+      decrypted = prot.clearKeys;
+    }
+    if (decrypted) {
+      sessionClearKeyPassword = entered;
+      decryptedClearKeysCache.set(hostKey, decrypted);
+      unlockedProtectionHosts.add(hostKey);
+      closePasswordModal(true);
+      return;
+    }
+    throw new Error('No keys to decrypt');
+  } catch {
     if (err) {
       err.textContent = 'Incorrect password. ClearKeys will remain hidden.';
       err.hidden = false;
@@ -1429,7 +1547,7 @@ $('cfg-clear')?.addEventListener('click', () => {
   }
 });
 
-$('cfg-save')?.addEventListener('click', () => {
+$('cfg-save')?.addEventListener('click', async () => {
   $('cfg-error').hidden = true;
   const hostInput = $('cfg-host-input').value.trim();
   const host = normalizeHost(hostInput) || currentTargetHost();
@@ -1459,6 +1577,9 @@ $('cfg-save')?.addEventListener('click', () => {
   }
 
   let clearKeys = null;
+  let encryptedClearKeys = null;
+  const hostKey = host || 'global';
+
   if (rawClearKeys) {
     const parsedKeys = parseClearKeys(rawClearKeys);
     if (parsedKeys.errors.length) {
@@ -1468,8 +1589,19 @@ $('cfg-save')?.addEventListener('click', () => {
       return;
     }
     clearKeys = parsedKeys.clearKeys;
+    decryptedClearKeysCache.set(hostKey, clearKeys);
+
+    let pwdToUse = sessionClearKeyPassword;
+    if (!pwdToUse) {
+      pwdToUse = (window.prompt('Set password to encrypt ClearKeys in storage:') || '').trim();
+      if (pwdToUse) sessionClearKeyPassword = pwdToUse;
+    }
+    if (pwdToUse) {
+      encryptedClearKeys = await encryptClearKeys(clearKeys, pwdToUse);
+    }
   } else if (isClearKeyLocked && host) {
     const existingProt = getStoredProtectionConfig(host) || (host === currentTargetHost() ? customSessionProtection : null);
+    if (existingProt?.encryptedClearKeys) encryptedClearKeys = existingProt.encryptedClearKeys;
     if (existingProt?.clearKeys) clearKeys = existingProt.clearKeys;
   }
 
@@ -1509,11 +1641,12 @@ $('cfg-save')?.addEventListener('click', () => {
     licenseUrl: licenseUrl || undefined,
     headers,
     robustness,
-    clearKeys,
+    clearKeys: encryptedClearKeys ? undefined : clearKeys,
+    encryptedClearKeys: encryptedClearKeys || undefined,
   });
 
-  if (protectionConfig && (protectionConfig.licenseUrl || protectionConfig.clearKeys)) {
-    customSessionProtection = protectionConfig;
+  if (protectionConfig && (protectionConfig.licenseUrl || protectionConfig.clearKeys || protectionConfig.encryptedClearKeys)) {
+    customSessionProtection = { ...protectionConfig, ...(clearKeys ? { clearKeys } : {}) };
     if (remember) persistProtectionConfig(host, protectionConfig, true);
   } else {
     customSessionProtection = null;
