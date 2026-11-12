@@ -52,6 +52,35 @@ const controls = initPlayerControls($('player'), video);
 initFrameCapture(video);
 const exampleURL = new URL('assets/example.flv', document.baseURI).href;
 
+// Theme initialization: default to dark mode
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.content = theme === 'dark' ? '#0f1210' : '#f7f7f2';
+  try { localStorage.setItem('dashplay_theme', theme); } catch { /* ignore */ }
+  const btn = $('theme-toggle');
+  if (btn) {
+    const isDark = theme === 'dark';
+    btn.setAttribute('aria-label', `Switch to ${isDark ? 'light' : 'dark'} mode`);
+    btn.title = `Switch to ${isDark ? 'light' : 'dark'} mode`;
+    $('theme-icon-sun')?.toggleAttribute('hidden', !isDark);
+    $('theme-icon-moon')?.toggleAttribute('hidden', isDark);
+  }
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('dashplay_theme') || 'dark'; // DEFAULT DARK
+  setTheme(saved);
+  const toggleBtn = $('theme-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+}
+initTheme();
+
 let engine = null;
 let hlsEngine = null;
 let dashEngine = null;
@@ -66,6 +95,7 @@ let copyTimer;
 let failed = false;
 let capturePending = false;
 let captureBlocked = false;
+let isMediaEncrypted = false;
 let qualityMode = 'loading';
 let liveOptionURL = null;
 let liveOptionAuto = false;
@@ -74,6 +104,28 @@ let includeProtectionInShare = true;
 let customSessionProtection = null;
 let customSessionHeaders = null;
 let protectionPrompting = false;
+
+let screenshotFeedbackTimer = null;
+let screenshotFadeTimer = null;
+
+function showScreenshotFeedback(text, state = 'success') {
+  clearTimeout(screenshotFeedbackTimer);
+  clearTimeout(screenshotFadeTimer);
+  const fb = $('screenshot-feedback');
+  if (!fb) return;
+  fb.textContent = text;
+  fb.dataset.state = state;
+  fb.classList.remove('is-fading');
+  fb.hidden = false;
+
+  screenshotFeedbackTimer = setTimeout(() => {
+    fb.classList.add('is-fading');
+    screenshotFadeTimer = setTimeout(() => {
+      fb.hidden = true;
+      fb.classList.remove('is-fading');
+    }, 300);
+  }, 300);
+}
 
 function loadScriptSequential(urls, globalKey) {
   if (window[globalKey]) return Promise.resolve(window[globalKey]);
@@ -172,156 +224,130 @@ function updateConfigPills() {
   const isExample = !url || url === exampleURL;
   const activeHeaders = !isExample ? resolveStreamHeaders(url, customSessionHeaders) : null;
   const headerCount = activeHeaders ? Object.keys(activeHeaders).length : 0;
-
-  $('open-site-headers').dataset.active = String(headerCount > 0);
-  $('headers-count-badge').hidden = headerCount === 0;
-  $('headers-count-badge').textContent = String(headerCount);
-
   const activeProtection = !isExample ? resolveStreamProtection(url) : null;
   const hasProtection = Boolean(activeProtection?.licenseUrl || activeProtection?.clearKeys);
-  $('open-protection-config').dataset.active = String(hasProtection);
-  $('protection-active-badge').hidden = !hasProtection;
+
+  const configBtn = $('open-config');
+  if (configBtn) {
+    const hasConfig = headerCount > 0 || hasProtection;
+    configBtn.dataset.active = String(hasConfig);
+    const badge = $('config-status-badge');
+    if (badge) {
+      badge.hidden = !hasConfig;
+      let badgeText = '';
+      if (headerCount > 0 && hasProtection) badgeText = `${headerCount}+PROT`;
+      else if (hasProtection) badgeText = 'PROT';
+      else badgeText = String(headerCount);
+      badge.textContent = badgeText;
+    }
+  }
 }
 
 function renderSavedRulesLists() {
-  const rules = loadSiteHeaders();
-  const headersList = $('saved-site-headers-list');
-  if (!rules.length) {
+  const container = $('saved-config-list');
+  if (!container) return;
+
+  const siteRules = loadSiteHeaders();
+  const savedProtections = listSavedProtectionConfigs();
+  const hosts = new Set([
+    ...siteRules.map((r) => r.host),
+    ...savedProtections.map((p) => p.host),
+  ]);
+
+  const hasCustomProt = Boolean(customSessionProtection?.licenseUrl || customSessionProtection?.clearKeys);
+  const currentHost = currentTargetHost();
+  if (hasCustomProt && currentHost) hosts.add(currentHost);
+  if (customSessionHeaders && currentHost) hosts.add(currentHost);
+
+  if (!hosts.size) {
     const empty = document.createElement('p');
     empty.className = 'saved-rule-empty';
-    empty.textContent = 'No per-site headers saved yet. Click "+ Configure headers" to add headers for a stream host.';
-    headersList.replaceChildren(empty);
-  } else {
-    headersList.replaceChildren(...rules.map((rule) => {
-      const item = document.createElement('div');
-      item.className = 'saved-rule-item';
-
-      const info = document.createElement('div');
-      info.className = 'saved-rule-info';
-      const hostEl = document.createElement('div');
-      hostEl.className = 'saved-rule-host';
-      hostEl.textContent = rule.host;
-
-      const countPill = document.createElement('span');
-      countPill.className = 'saved-rule-pill';
-      const count = Object.keys(rule.headers).length;
-      countPill.textContent = `${count} header${count === 1 ? '' : 's'}`;
-      hostEl.appendChild(countPill);
-
-      const detail = document.createElement('pre');
-      detail.className = 'saved-rule-detail';
-      detail.textContent = formatHeaderLines(rule.headers);
-      info.append(hostEl, detail);
-
-      const actions = document.createElement('div');
-      actions.className = 'saved-rule-actions';
-      const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.className = 'rule-btn';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', () => openSiteHeadersModal(rule.host));
-
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'rule-btn rule-btn--danger';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => {
-        removeSiteHeaders(rule.host);
-        if (source && normalizeHost(new URL(source.url).hostname) === rule.host) {
-          customSessionHeaders = null;
-          source.headers = includeHeadersInShare ? resolveStreamHeaders(source.url) : null;
-          updateAddress();
-          refreshSharePanel();
-        }
-        renderSavedRulesLists();
-        updateConfigPills();
-      });
-
-      actions.append(editBtn, removeBtn);
-      item.append(info, actions);
-      return item;
-    }));
+    empty.textContent = 'No rules saved yet. Click "+ Configure Headers & Protection" to add request headers or protection for a stream host.';
+    container.replaceChildren(empty);
+    return;
   }
 
-  const protectionList = $('saved-protection-list');
-  const savedProtection = listSavedProtectionConfigs();
-  const hasCustomSessionProt = Boolean(customSessionProtection?.licenseUrl || customSessionProtection?.clearKeys);
-  if (!savedProtection.length && !hasCustomSessionProt) {
-    const empty = document.createElement('p');
-    empty.className = 'saved-rule-empty';
-    empty.textContent = 'No DASH Protection configurations saved yet. Click "+ Configure Protection" when playing encrypted .mpd streams.';
-    protectionList.replaceChildren(empty);
-  } else {
-    const items = [...savedProtection];
-    if (hasCustomSessionProt) {
-      const host = currentTargetHost() || 'Current stream';
-      if (!items.some((entry) => entry.host === host)) {
-        items.unshift({ host, config: customSessionProtection, sessionOnly: true });
-      }
-    }
-    protectionList.replaceChildren(...items.map(({ host, config, sessionOnly }) => {
-      const item = document.createElement('div');
-      item.className = 'saved-rule-item';
+  const hostList = Array.from(hosts).sort();
+  container.replaceChildren(...hostList.map((host) => {
+    const item = document.createElement('div');
+    item.className = 'saved-rule-item';
 
-      const info = document.createElement('div');
-      info.className = 'saved-rule-info';
-      const hostEl = document.createElement('div');
-      hostEl.className = 'saved-rule-host';
-      hostEl.textContent = host;
+    const ruleHeaders = getHeadersForHost(host) || (host === currentHost ? customSessionHeaders : null);
+    const protConfig = getStoredProtectionConfig(host) || (host === currentHost ? customSessionProtection : null);
 
-      const keyCount = config.clearKeys ? Object.keys(config.clearKeys).length : 0;
+    const info = document.createElement('div');
+    info.className = 'saved-rule-info';
+    const hostEl = document.createElement('div');
+    hostEl.className = 'saved-rule-host';
+    hostEl.textContent = host;
+
+    const hdrCount = ruleHeaders ? Object.keys(ruleHeaders).length : 0;
+    if (hdrCount) {
       const pill = document.createElement('span');
       pill.className = 'saved-rule-pill';
-      pill.textContent = keyCount
-        ? `${keyCount} ClearKey${keyCount === 1 ? '' : 's'}`
-        : (config.robustness || 'Protection');
+      pill.textContent = `${hdrCount} header${hdrCount === 1 ? '' : 's'}`;
       hostEl.appendChild(pill);
+    }
 
-      const detail = document.createElement('pre');
-      detail.className = 'saved-rule-detail';
-      const detailLines = [];
-      if (keyCount) {
-        detailLines.push(`Keys: ${formatClearKeys(config.clearKeys, ', ')}`);
-      }
-      if (config.licenseUrl) {
-        detailLines.push(`License: ${config.licenseUrl}`);
-      }
-      const hdrCount = config.headers ? Object.keys(config.headers).length : 0;
-      if (hdrCount) {
-        detailLines.push(`Headers: ${Object.keys(config.headers).join(', ')}`);
-      }
+    if (protConfig?.clearKeys || protConfig?.licenseUrl) {
+      const keyCount = protConfig.clearKeys ? Object.keys(protConfig.clearKeys).length : 0;
+      const protPill = document.createElement('span');
+      protPill.className = 'saved-rule-pill';
+      protPill.textContent = keyCount
+        ? `${keyCount} ClearKey${keyCount === 1 ? '' : 's'}`
+        : (protConfig.robustness || 'DASH Protection');
+      hostEl.appendChild(protPill);
+    }
+
+    const detail = document.createElement('pre');
+    detail.className = 'saved-rule-detail';
+    const detailLines = [];
+    if (ruleHeaders && Object.keys(ruleHeaders).length) {
+      detailLines.push(`Headers: ${Object.keys(ruleHeaders).join(', ')}`);
+    }
+    if (protConfig?.licenseUrl) {
+      detailLines.push(`License: ${protConfig.licenseUrl}`);
+    }
+    if (detailLines.length) {
       detail.textContent = detailLines.join('\n');
       info.append(hostEl, detail);
+    } else {
+      info.append(hostEl);
+    }
 
-      const actions = document.createElement('div');
-      actions.className = 'saved-rule-actions';
-      const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.className = 'rule-btn';
-      editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', () => openProtectionModal({ prefill: config, host }));
+    const actions = document.createElement('div');
+    actions.className = 'saved-rule-actions';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'rule-btn';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openConfigModal({ host, prefill: protConfig }));
 
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'rule-btn rule-btn--danger';
-      removeBtn.textContent = 'Remove';
-      removeBtn.addEventListener('click', () => {
-        if (!sessionOnly) removeStoredProtectionConfig(host);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'rule-btn rule-btn--danger';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      removeSiteHeaders(host);
+      removeStoredProtectionConfig(host);
+      if (host === currentHost) {
+        customSessionHeaders = null;
         customSessionProtection = null;
         if (source) {
-          source.protection = includeProtectionInShare ? resolveStreamProtection(source.url) : null;
+          source.headers = null;
+          source.protection = null;
           updateAddress();
           refreshSharePanel();
         }
-        renderSavedRulesLists();
-        updateConfigPills();
-      });
+      }
+      renderSavedRulesLists();
+      updateConfigPills();
+    });
 
-      actions.append(editBtn, removeBtn);
-      item.append(info, actions);
-      return item;
-    }));
-  }
+    actions.append(editBtn, removeBtn);
+    item.append(info, actions);
+    return item;
+  }));
 }
 
 function singleQuality(label, hint) {
@@ -338,9 +364,13 @@ function resetVideoTools() {
   qualityMode = 'loading';
   capturePending = false;
   captureBlocked = false;
+  isMediaEncrypted = false;
   singleQuality('Loading…', 'Available qualities appear after loading.');
   $('screenshot-button').disabled = true;
   $('screenshot-label').textContent = 'Save screenshot';
+  clearTimeout(screenshotFeedbackTimer);
+  clearTimeout(screenshotFadeTimer);
+  $('screenshot-feedback').classList.remove('is-fading');
   $('screenshot-feedback').hidden = true;
 }
 
@@ -391,7 +421,26 @@ function refreshQuality() {
 }
 
 function refreshScreenshot() {
-  $('screenshot-button').disabled = !source || failed || capturePending || captureBlocked || video.readyState < 2 || !video.videoWidth || !video.videoHeight || video.seeking;
+  const btn = $('screenshot-button');
+  if (!btn) return;
+  const url = source?.url || currentTargetUrl();
+  const currentProtection = url ? resolveStreamProtection(url) : null;
+  const isEncryptedMpd = source?.type === 'dash' && (
+    isMediaEncrypted ||
+    Boolean(video.mediaKeys) ||
+    Boolean(currentProtection?.licenseUrl || currentProtection?.clearKeys)
+  );
+
+  if (isEncryptedMpd) {
+    btn.disabled = true;
+    btn.classList.add('is-drm-blocked');
+    btn.title = 'Screenshots unavailable for encrypted DASH streams (DRM protection blocks frame capture)';
+    return;
+  }
+
+  btn.classList.remove('is-drm-blocked');
+  btn.title = 'Save current frame as PNG';
+  btn.disabled = !source || failed || capturePending || captureBlocked || video.readyState < 2 || !video.videoWidth || !video.videoHeight || video.seeking;
 }
 
 function status(text, state = 'ready') {
@@ -421,7 +470,8 @@ function fail(title, message, { showProtectionAction = false } = {}) {
   dispose();
   $('video-message-title').textContent = title;
   $('video-message-text').textContent = message;
-  $('error-protection-button').hidden = !showProtectionAction && !['dash', 'hls'].includes(source?.type);
+  const errBtn = $('error-config-button');
+  if (errBtn) errBtn.hidden = false;
   $('video-message').hidden = false;
   status('Unable to play this source', 'error');
   singleQuality('Unavailable', 'Load a playable video to see its quality.');
@@ -445,8 +495,7 @@ function buildShareSource() {
 
 function getDisplayedShareUrl(shareable) {
   if (!shareable) return '';
-  if (shareLinkMode === 'compact') return createCompactPlayerLink(location.href, shareable);
-  if (currentAliasSlug && (currentAliasInRepo || shareLinkModeManual)) {
+  if (shareLinkMode === 'alias' && currentAliasSlug && (currentAliasInRepo || shareLinkModeManual)) {
     return createAliasPlayerLink(location.href, currentAliasSlug);
   }
   return createCompactPlayerLink(location.href, shareable);
@@ -882,8 +931,11 @@ async function startHlsPlayback(url, current, effectiveHeaders, effectiveProtect
                   }
                 }, 0);
               };
-            } else if (effectiveProtection?.headers) {
-              for (const [k, v] of Object.entries(effectiveProtection.headers)) {
+            } else {
+              const siteHdrs = getEffectiveHeaders(licenseUrl, url, customSessionHeaders || effectiveHeaders);
+              const protHdrs = effectiveProtection?.headers;
+              const merged = { ...(siteHdrs || {}), ...(protHdrs || {}) };
+              for (const [k, v] of Object.entries(merged)) {
                 try { xhr.setRequestHeader(k, v); } catch { /* Skip browser-restricted header names */ }
               }
             }
@@ -1094,45 +1146,70 @@ function networkFailure(resource = 'video', code) {
   fail('We couldn’t load this link', message);
 }
 
-// --- Modal: Per-site Headers -----------------------------------------------
+// --- Modal: Unified Headers & DASH Protection -------------------------------
 
-function openSiteHeadersModal(preferredHost = '') {
-  const host = normalizeHost(preferredHost) || currentTargetHost();
-  $('sh-host-input').value = host;
-  const existing = host ? getHeadersForHost(host) : customSessionHeaders;
-  populateHeaderRows($('sh-header-rows'), existing, ['Referer', '']);
-  $('sh-include-share').checked = includeHeadersInShare;
-  $('sh-error').hidden = true;
-  $('site-headers-modal').hidden = false;
+function openConfigModal({ detectedError = '', prefill = null, host = '' } = {}) {
+  protectionPrompting = true;
+  const targetHost = normalizeHost(host) || currentTargetHost();
+  $('cfg-host-input').value = targetHost;
+
+  const targetUrl = currentTargetUrl();
+  const existingHeaders = targetHost ? getHeadersForHost(targetHost) : customSessionHeaders;
+  populateHeaderRows($('cfg-header-rows'), existingHeaders, ['Referer', '']);
+
+  const initialProt = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(targetHost || targetUrl, { fallbackToLast: false });
+  $('cfg-clearkeys').value = initialProt?.clearKeys ? formatClearKeys(initialProt.clearKeys, '\n') : '';
+  $('cfg-license-url').value = initialProt?.licenseUrl || '';
+  $('cfg-robustness').value = initialProt?.robustness || '';
+
+  const banner = $('cfg-detected-message');
+  if (detectedError) {
+    banner.textContent = `Detected encrypted stream:\n${detectedError}`;
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+    banner.textContent = '';
+  }
+
+  $('cfg-remember').checked = true;
+  $('cfg-include-share').checked = includeHeadersInShare || includeProtectionInShare;
+  $('cfg-error').hidden = true;
+  $('stream-config-modal').hidden = false;
+
   setTimeout(() => {
-    if (!host) $('sh-host-input').focus();
-    else $('sh-header-rows').querySelector('[data-header-value]')?.focus();
+    if (!targetHost) $('cfg-host-input').focus();
+    else if (detectedError && !initialProt?.clearKeys && !initialProt?.licenseUrl) $('cfg-license-url').focus();
+    else $('cfg-header-rows').querySelector('[data-header-value]')?.focus();
   }, 0);
 }
 
-function closeSiteHeadersModal() {
-  $('site-headers-modal').hidden = true;
+function closeConfigModal() {
+  $('stream-config-modal').hidden = true;
+  protectionPrompting = false;
 }
 
-$('open-site-headers').addEventListener('click', () => openSiteHeadersModal());
-$('card-open-headers').addEventListener('click', () => openSiteHeadersModal());
-$('error-headers-button').addEventListener('click', () => openSiteHeadersModal());
-$('sh-close-x').addEventListener('click', closeSiteHeadersModal);
-$('sh-cancel').addEventListener('click', closeSiteHeadersModal);
-$('site-headers-modal').addEventListener('click', (event) => {
-  if (event.target === $('site-headers-modal')) closeSiteHeadersModal();
+const openSiteHeadersModal = (host = '') => openConfigModal({ host });
+const openProtectionModal = ({ detectedError = '', prefill = null, host = '' } = {}) => openConfigModal({ detectedError, prefill, host });
+
+$('open-config')?.addEventListener('click', () => openConfigModal());
+$('card-open-config')?.addEventListener('click', () => openConfigModal());
+$('error-config-button')?.addEventListener('click', () => openConfigModal());
+$('cfg-close-x')?.addEventListener('click', closeConfigModal);
+$('cfg-cancel')?.addEventListener('click', closeConfigModal);
+$('stream-config-modal')?.addEventListener('click', (event) => {
+  if (event.target === $('stream-config-modal')) closeConfigModal();
 });
 
-$('sh-add-header').addEventListener('click', () => {
+$('cfg-add-header')?.addEventListener('click', () => {
   const row = createHeaderRow();
-  $('sh-header-rows').appendChild(row);
+  $('cfg-header-rows').appendChild(row);
   row.querySelector('[data-header-key]')?.focus();
 });
 
-document.querySelectorAll('[data-sh-preset]').forEach((btn) => {
+document.querySelectorAll('[data-cfg-preset]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    const presetName = btn.dataset.shPreset;
-    const container = $('sh-header-rows');
+    const presetName = btn.dataset.cfgPreset;
+    const container = $('cfg-header-rows');
     const existingRow = Array.from(container.querySelectorAll('.header-row')).find(
       (r) => r.querySelector('[data-header-key]')?.value.trim().toLowerCase() === presetName.toLowerCase(),
     );
@@ -1154,10 +1231,10 @@ document.querySelectorAll('[data-sh-preset]').forEach((btn) => {
   });
 });
 
-$('sh-header-rows').addEventListener('click', (event) => {
+$('cfg-header-rows')?.addEventListener('click', (event) => {
   const btn = event.target.closest('[data-header-remove]');
   if (!btn) return;
-  const container = $('sh-header-rows');
+  const container = $('cfg-header-rows');
   const row = btn.closest('.header-row');
   if (container.children.length <= 1) {
     row.querySelectorAll('input').forEach((input) => { input.value = ''; });
@@ -1166,11 +1243,15 @@ $('sh-header-rows').addEventListener('click', (event) => {
   }
 });
 
-$('sh-clear').addEventListener('click', () => {
-  const host = normalizeHost($('sh-host-input').value) || currentTargetHost();
-  if (host) removeSiteHeaders(host);
+$('cfg-clear')?.addEventListener('click', () => {
+  const host = normalizeHost($('cfg-host-input').value) || currentTargetHost();
+  if (host) {
+    removeSiteHeaders(host);
+    removeStoredProtectionConfig(host);
+  }
   customSessionHeaders = null;
-  closeSiteHeadersModal();
+  customSessionProtection = null;
+  closeConfigModal();
   renderSavedRulesLists();
   updateConfigPills();
   if (source && source.url !== exampleURL) {
@@ -1178,174 +1259,45 @@ $('sh-clear').addEventListener('click', () => {
   }
 });
 
-$('sh-save').addEventListener('click', () => {
-  $('sh-error').hidden = true;
-  const hostInput = $('sh-host-input').value.trim();
+$('cfg-save')?.addEventListener('click', () => {
+  $('cfg-error').hidden = true;
+  const hostInput = $('cfg-host-input').value.trim();
   const host = normalizeHost(hostInput) || currentTargetHost();
   if (!host) {
-    $('sh-error').textContent = 'Enter a valid stream host (for example: cdn.example.com).';
-    $('sh-error').hidden = false;
-    $('sh-host-input').focus();
+    $('cfg-error').textContent = 'Enter a valid stream host (for example: cdn.example.com).';
+    $('cfg-error').hidden = false;
+    $('cfg-host-input').focus();
     return;
   }
 
-  const { headers, errors } = readHeaderRows($('sh-header-rows'));
+  const { headers, errors } = readHeaderRows($('cfg-header-rows'));
   if (errors.length) {
-    $('sh-error').textContent = errors[0];
-    $('sh-error').hidden = false;
+    $('cfg-error').textContent = errors[0];
+    $('cfg-error').hidden = false;
     return;
   }
 
-  includeHeadersInShare = $('sh-include-share').checked;
-  try {
-    if (headers && Object.keys(headers).length) {
-      upsertSiteHeaders(host, headers, false);
-      if (host === currentTargetHost()) customSessionHeaders = headers;
-    } else {
-      removeSiteHeaders(host);
-      if (host === currentTargetHost()) customSessionHeaders = null;
-    }
-  } catch (error) {
-    $('sh-error').textContent = error.message;
-    $('sh-error').hidden = false;
-    return;
-  }
+  let rawClearKeys = $('cfg-clearkeys').value.trim();
+  let licenseUrl = $('cfg-license-url').value.trim();
 
-  closeSiteHeadersModal();
-  renderSavedRulesLists();
-  updateConfigPills();
-
-  const rawUrl = $('video-url').value.trim();
-  if (rawUrl && rawUrl !== exampleURL) {
-    loadSource(rawUrl, $('source-type').value, $('live-stream').checked);
-  } else if (source) {
-    updateFormatBadge();
-    updateAddress();
-    refreshSharePanel();
-  }
-});
-
-// --- Modal: DASH Protection ------------------------------------------------
-
-function openProtectionModal({ detectedError = '', prefill = null, host = '' } = {}) {
-  protectionPrompting = true;
-  const targetUrl = currentTargetUrl();
-  const initial = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(host || targetUrl, { fallbackToLast: true });
-
-  const banner = $('protection-detected-message');
-  if (detectedError) {
-    banner.textContent = `Detected encrypted DASH stream:\n${detectedError}`;
-    banner.hidden = false;
-  } else {
-    banner.hidden = true;
-    banner.textContent = '';
-  }
-
-  $('protection-clearkeys').value = initial?.clearKeys ? formatClearKeys(initial.clearKeys, ', ') : '';
-  $('protection-license-url').value = initial?.licenseUrl || '';
-  $('protection-robustness').value = initial?.robustness || '';
-  populateHeaderRows($('protection-header-rows'), initial?.headers, ['', '']);
-  $('protection-include-share').checked = includeProtectionInShare;
-  $('protection-error').hidden = true;
-  $('protection-modal').hidden = false;
-  setTimeout(() => {
-    if (initial?.licenseUrl && !initial?.clearKeys) $('protection-license-url').focus();
-    else $('protection-clearkeys').focus();
-  }, 0);
-}
-
-function closeProtectionModal() {
-  $('protection-modal').hidden = true;
-  protectionPrompting = false;
-}
-
-$('open-protection-config').addEventListener('click', () => openProtectionModal());
-$('card-open-protection').addEventListener('click', () => openProtectionModal());
-$('error-protection-button').addEventListener('click', () => openProtectionModal());
-$('protection-close-x').addEventListener('click', closeProtectionModal);
-$('protection-cancel').addEventListener('click', closeProtectionModal);
-$('protection-modal').addEventListener('click', (event) => {
-  if (event.target === $('protection-modal')) closeProtectionModal();
-});
-
-$('protection-add-header').addEventListener('click', () => {
-  const row = createHeaderRow();
-  $('protection-header-rows').appendChild(row);
-  row.querySelector('[data-header-key]')?.focus();
-});
-
-document.querySelectorAll('[data-protection-preset]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const presetName = btn.dataset.protectionPreset;
-    const container = $('protection-header-rows');
-    const emptyRow = Array.from(container.querySelectorAll('.header-row')).find(
-      (r) => !r.querySelector('[data-header-key]')?.value.trim() && !r.querySelector('[data-header-value]')?.value.trim(),
-    );
-    if (emptyRow) {
-      emptyRow.querySelector('[data-header-key]').value = presetName;
-      emptyRow.querySelector('[data-header-value]')?.focus();
-    } else {
-      const row = createHeaderRow(presetName, '');
-      container.appendChild(row);
-      row.querySelector('[data-header-value]')?.focus();
-    }
-  });
-});
-
-$('protection-header-rows').addEventListener('click', (event) => {
-  const btn = event.target.closest('[data-header-remove]');
-  if (!btn) return;
-  const container = $('protection-header-rows');
-  const row = btn.closest('.header-row');
-  if (container.children.length <= 1) {
-    row.querySelectorAll('input').forEach((input) => { input.value = ''; });
-  } else {
-    row.remove();
-  }
-});
-
-$('protection-clear').addEventListener('click', () => {
-  const host = currentTargetHost();
-  if (host) removeStoredProtectionConfig(host);
-  customSessionProtection = null;
-  closeProtectionModal();
-  renderSavedRulesLists();
-  updateConfigPills();
-  if (source && source.url !== exampleURL) {
-    loadSource(source.url, source.type, source.live);
-  }
-});
-
-$('protection-apply').addEventListener('click', () => {
-  $('protection-error').hidden = true;
-  let rawClearKeys = $('protection-clearkeys').value.trim();
-  let licenseUrl = $('protection-license-url').value.trim();
-
-  // If the user pasted KID:KEY pairs into the License URL input, handle it gracefully
+  // If the user pasted KID:KEY pairs into the License URL input, handle gracefully
   if (!rawClearKeys && licenseUrl && !/^https?:\/\//i.test(licenseUrl) && licenseUrl.includes(':')) {
     rawClearKeys = licenseUrl;
     licenseUrl = '';
-    $('protection-clearkeys').value = rawClearKeys;
-    $('protection-license-url').value = '';
+    $('cfg-clearkeys').value = rawClearKeys;
+    $('cfg-license-url').value = '';
   }
 
   let clearKeys = null;
   if (rawClearKeys) {
     const parsedKeys = parseClearKeys(rawClearKeys);
     if (parsedKeys.errors.length) {
-      $('protection-error').textContent = parsedKeys.errors[0];
-      $('protection-error').hidden = false;
-      $('protection-clearkeys').focus();
+      $('cfg-error').textContent = parsedKeys.errors[0];
+      $('cfg-error').hidden = false;
+      $('cfg-clearkeys').focus();
       return;
     }
     clearKeys = parsedKeys.clearKeys;
-  }
-
-  if (!clearKeys && !licenseUrl) {
-    $('protection-error').textContent = 'Enter decryption keys (KID:KEY pairs) or a Protection license URL (HTTP/HTTPS).';
-    $('protection-error').hidden = false;
-    $('protection-clearkeys').focus();
-    return;
   }
 
   if (licenseUrl) {
@@ -1353,38 +1305,49 @@ $('protection-apply').addEventListener('click', () => {
       const parsed = new URL(licenseUrl);
       if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Invalid protocol');
     } catch {
-      $('protection-error').textContent = 'Enter a valid HTTP or HTTPS Protection license URL.';
-      $('protection-error').hidden = false;
-      $('protection-license-url').focus();
+      $('cfg-error').textContent = 'Enter a valid HTTP or HTTPS Protection license URL.';
+      $('cfg-error').hidden = false;
+      $('cfg-license-url').focus();
       return;
     }
   }
 
-  const { headers, errors } = readHeaderRows($('protection-header-rows'));
-  if (errors.length) {
-    $('protection-error').textContent = errors[0];
-    $('protection-error').hidden = false;
+  const robustness = $('cfg-robustness').value.trim() || undefined;
+  const remember = $('cfg-remember').checked;
+  const includeShare = $('cfg-include-share').checked;
+  includeHeadersInShare = includeShare;
+  includeProtectionInShare = includeShare;
+
+  try {
+    if (headers && Object.keys(headers).length) {
+      if (remember) upsertSiteHeaders(host, headers, false);
+      if (host === currentTargetHost()) customSessionHeaders = headers;
+    } else {
+      if (remember) removeSiteHeaders(host);
+      if (host === currentTargetHost()) customSessionHeaders = null;
+    }
+  } catch (error) {
+    $('cfg-error').textContent = error.message;
+    $('cfg-error').hidden = false;
     return;
   }
 
-  const robustness = $('protection-robustness').value.trim() || undefined;
-  const remember = $('protection-remember').checked;
-  includeProtectionInShare = $('protection-include-share').checked;
-
-  const config = sanitizeProtectionConfig({
+  const protectionConfig = sanitizeProtectionConfig({
     licenseUrl: licenseUrl || undefined,
     headers,
     robustness,
     clearKeys,
   });
 
-  customSessionProtection = config;
-  const targetUrl = currentTargetUrl();
-  if (targetUrl && targetUrl !== exampleURL) {
-    persistProtectionConfig(targetUrl, config, remember);
+  if (protectionConfig && (protectionConfig.licenseUrl || protectionConfig.clearKeys)) {
+    customSessionProtection = protectionConfig;
+    if (remember) persistProtectionConfig(host, protectionConfig, true);
+  } else {
+    customSessionProtection = null;
+    if (remember) removeStoredProtectionConfig(host);
   }
 
-  closeProtectionModal();
+  closeConfigModal();
   renderSavedRulesLists();
   updateConfigPills();
 
@@ -1423,6 +1386,10 @@ for (const event of ['loadeddata', 'seeked', 'resize', 'playing']) {
 for (const event of ['seeking', 'emptied']) {
   video.addEventListener(event, refreshScreenshot);
 }
+video.addEventListener('encrypted', () => {
+  isMediaEncrypted = true;
+  refreshScreenshot();
+});
 video.addEventListener('playing', () => { if (!failed) status('Playing'); });
 video.addEventListener('pause', () => { if (source && !failed && video.readyState >= 2) status(video.ended ? 'Playback finished' : 'Paused · Press play to resume'); });
 video.addEventListener('waiting', () => { if (source && !failed) status('Buffering…', 'loading'); });
@@ -1491,19 +1458,15 @@ $('screenshot-button').addEventListener('click', async () => {
       link.remove();
       setTimeout(() => URL.revokeObjectURL(objectURL), 60000);
     }
-    $('screenshot-feedback').textContent = `Screenshot ready · ${filename}`;
-    $('screenshot-feedback').dataset.state = 'success';
-    $('screenshot-feedback').hidden = false;
+    showScreenshotFeedback(`Screenshot ready · ${filename}`, 'success');
   } catch (error) {
     if (current !== generation || failed) return;
     if (error.name === 'SecurityError') {
       captureBlocked = true;
-      $('screenshot-feedback').textContent = 'This video host does not allow screenshots from this page. Its media responses must permit cross-origin access (CORS).';
+      showScreenshotFeedback('This video host does not allow screenshots from this page. Its media responses must permit cross-origin access (CORS).', 'error');
     } else {
-      $('screenshot-feedback').textContent = error.message || 'Could not save the screenshot. Please try again.';
+      showScreenshotFeedback(error.message || 'Could not save the screenshot. Please try again.', 'error');
     }
-    $('screenshot-feedback').dataset.state = 'error';
-    $('screenshot-feedback').hidden = false;
   } finally {
     if (current === generation) {
       capturePending = false;
@@ -1675,9 +1638,24 @@ $('close-share').addEventListener('click', () => {
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
-    if (!$('site-headers-modal').hidden) closeSiteHeadersModal();
-    if (!$('protection-modal').hidden) closeProtectionModal();
+    if (!$('stream-config-modal').hidden) closeConfigModal();
     if (!$('gh-sync-modal').hidden) closeGhSyncModal();
+  }
+});
+
+// In-page navigation: smooth scroll to sections without retriggering popstate or stopping video
+document.addEventListener('click', (event) => {
+  const anchor = event.target.closest('a[href^="#"]');
+  if (!anchor) return;
+  const href = anchor.getAttribute('href');
+  if (!href || href === '#') return;
+  const targetEl = document.querySelector(href);
+  if (targetEl) {
+    event.preventDefault();
+    targetEl.scrollIntoView({ behavior: 'smooth' });
+    try {
+      history.replaceState(history.state, '', href);
+    } catch { /* ignore */ }
   }
 });
 
@@ -1685,9 +1663,22 @@ async function restoreLocation() {
   let initial = readSource(location.search, location.hash);
   renderSavedRulesLists();
 
+  // If a video is already loaded or playing and the URL has no new stream parameters, do not stop or reload the player
+  if (source && !initial.url && !initial.aliasSlug) {
+    return;
+  }
+
+  // If the stream requested is identical to what is already playing, do not stop or reload
+  if (source && initial.url && source.url === initial.url) {
+    return;
+  }
+
   let matchedSlug = '';
   if (!initial.url && initial.aliasSlug) {
     matchedSlug = initial.aliasSlug;
+    if (source && currentAliasSlug && currentAliasSlug === matchedSlug) {
+      return;
+    }
     status('Loading local stream preset…', 'loading');
     $('source-name').textContent = `Preset (${matchedSlug})`;
     const resolved = await resolveAliasSlug(matchedSlug);
@@ -1713,7 +1704,7 @@ async function restoreLocation() {
       inlineProtection: initial.protection,
       preferredAlias: matchedSlug,
     });
-  } else {
+  } else if (!source) {
     loadSource(exampleURL, 'flv', false, { updateURL: false, example: true });
   }
 }

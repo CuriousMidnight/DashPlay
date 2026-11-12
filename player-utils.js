@@ -190,10 +190,20 @@ export function parseClearKeys(raw) {
   }
 
   const cleaned = text.replace(/(?:^|\s)--?(?:keys?|clearkeys?)(?=\s|$)/gi, ' ');
-  const tokens = cleaned
-    .split(/[\r\n,;]+|\s+/)
+  const rawChunks = cleaned
+    .split(/[\r\n,;]+/)
     .map((t) => t.trim())
     .filter(Boolean);
+
+  const tokens = [];
+  for (const chunk of rawChunks) {
+    const colonCount = (chunk.match(/[:=]/g) || []).length;
+    if (colonCount > 1 && /\s+/.test(chunk)) {
+      tokens.push(...chunk.split(/\s+/).map((t) => t.trim()).filter(Boolean));
+    } else {
+      tokens.push(chunk);
+    }
+  }
 
   tokens.forEach((token, idx) => {
     const sepIndex = token.indexOf(':') !== -1 ? token.indexOf(':') : token.indexOf('=');
@@ -615,7 +625,10 @@ export function readSource(search, hash = '') {
     }
   }
 
-  const rawAlias = params.get('s') || params.get('id') || hashParams.get('s') || (!hashClean.includes('=') && hashClean ? hashClean : '');
+  const reservedAnchors = new Set(['main', 'how-it-works', 'stream-features', 'player', 'video', 'source-form', 'stream-config-card', 'stream-features-card']);
+  const isPageAnchor = reservedAnchors.has(hashClean.toLowerCase()) || (typeof document !== 'undefined' && Boolean(document.getElementById?.(hashClean)));
+
+  const rawAlias = params.get('s') || params.get('id') || hashParams.get('s') || (!isPageAnchor && !hashClean.includes('=') && hashClean ? hashClean : '');
   const aliasSlug = /^[0-9A-Za-z_-]{1,48}$/.test(rawAlias) ? rawAlias : '';
 
   const url = params.get('url') || '';
