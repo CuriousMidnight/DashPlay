@@ -18,7 +18,6 @@ DashPlay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DA
   - Click **Copy shareable link** to generate a single link containing the stream URL, format, per-site request headers, and DASH Protection configuration:
     - **Admin Only** (`?s=<slug>`) — Ultra-short preset links backed by `streams.json` in your GitHub repository (with one-click GitHub Auto-Sync for the repository owner).
     - **Compact (`?z=…`)** — Self-contained compressed token links that work immediately for anyone without committing to `streams.json`.
-    - **Full (`?url=…`)** — Explicit query parameters (`url`, `type`, `live`, `headers`, `license`, `robustness`, `protectionHeaders`).
 - **Save screenshot**:
   - Download the current video frame as a full-resolution PNG.
 
