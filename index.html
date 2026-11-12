@@ -265,7 +265,10 @@
         <div class="modal-divider"><span>DASH PROTECTION (OPTIONAL)</span></div>
 
         <label class="modal-field">
-          <span class="field-label">ClearKey (KID:KEY hex pairs, newline or comma separated)</span>
+          <div class="field-label-row">
+            <span class="field-label">ClearKey (KID:KEY hex pairs, newline or comma separated)</span>
+            <button id="cfg-clearkey-lock-status" class="chip-button" type="button" style="display:none;" title="Click to unlock or view keys">🔒 Hidden (click to unlock)</button>
+          </div>
           <textarea id="cfg-clearkeys" rows="3" spellcheck="false" autocomplete="off" placeholder="e46e4b85437140e79391e6b9ef25e07a:7a1c4e7df2277d337d45f44e73d097c6&#10;11223344556677889900aabbccddeeff:ffeeddccbbaa00998877665544332211"></textarea>
         </label>
 
@@ -306,6 +309,32 @@
           <button id="cfg-save" type="button" class="modal-btn modal-btn--primary">Save &amp; reload</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal: ClearKey Password Protection -->
+  <div id="clearkey-password-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="pwd-modal-title">
+    <div class="modal-panel" style="max-width: 400px;">
+      <div class="modal-header">
+        <div>
+          <h2 id="pwd-modal-title" class="modal-title">Protected ClearKeys</h2>
+          <p class="modal-subtitle">Enter password to view saved ClearKey decryption keys:</p>
+        </div>
+        <button id="pwd-modal-close" class="modal-close-x" type="button" aria-label="Close dialog">✕</button>
+      </div>
+      <form id="pwd-modal-form" class="modal-body" style="padding-bottom: 0;">
+        <label class="modal-field">
+          <span class="field-label">Password</span>
+          <input id="clearkey-pwd-input" type="password" spellcheck="false" autocomplete="current-password" placeholder="Enter password" autofocus>
+        </label>
+        <p id="clearkey-pwd-error" class="modal-error" hidden></p>
+        <div class="modal-actions" style="margin-top: 8px;">
+          <button id="pwd-modal-cancel" class="modal-btn" type="button">Keep Hidden</button>
+          <div class="modal-actions-right">
+            <button id="pwd-modal-unlock" class="modal-btn modal-btn--primary" type="submit">Unlock</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 

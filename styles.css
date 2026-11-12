@@ -278,6 +278,7 @@ video.frame-rendered{visibility:hidden}
 
 /* Modals */
 .modal-backdrop{position:fixed;inset:0;z-index:11000;background:#050705c9;display:flex;align-items:center;justify-content:center;padding:18px;backdrop-filter:blur(3px)}
+#clearkey-password-modal{z-index:12000}
 .modal-panel{width:min(640px,96vw);max-height:90vh;overflow:auto;background:var(--modal-bg);border:1px solid var(--modal-border);border-radius:12px;box-shadow:var(--modal-shadow);padding:22px 24px;color:var(--ink)}
 .modal-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .modal-title{font-size:19px;font-weight:650;margin:0 0 4px}

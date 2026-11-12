@@ -11,6 +11,7 @@ import {
   clearKeysToDashMap,
   createClearKeyJwkBuffer,
   rewriteMpdForClearKey,
+  extractMpdDefaultKids,
   sanitizeProtectionConfig,
   readSource,
   parseShareableInput,
@@ -104,6 +105,12 @@ let includeProtectionInShare = true;
 let customSessionProtection = null;
 let customSessionHeaders = null;
 let protectionPrompting = false;
+
+const CLEARKEY_PASSWORD = 'OOYqw7h9w94q';
+let unlockedProtectionHosts = new Set();
+let isClearKeyLocked = false;
+let pendingConfigArgs = null;
+let dashDecryptionWatchdog = null;
 
 let screenshotFeedbackTimer = null;
 let screenshotFadeTimer = null;
@@ -450,6 +457,8 @@ function status(text, state = 'ready') {
 
 function dispose() {
   clearTimeout(readinessTimer);
+  clearTimeout(dashDecryptionWatchdog);
+  dashDecryptionWatchdog = null;
   controls.setSource();
   const previous = engine;
   engine = null;
@@ -1028,7 +1037,6 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
         ...(dashClearKeys ? {
           protection: {
             ignoreEmeEncryptedEvent: true,
-            ignoreKeyStatuses: true,
           },
           capabilities: {
             useMediaCapabilitiesApi: false,
@@ -1049,6 +1057,18 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
       const firstKidHex = Object.keys(clearKeys)[0] || '';
       player.addResponseInterceptor((response) => {
         if (typeof response?.data === 'string' && response.data.includes('<MPD')) {
+          const manifestKids = extractMpdDefaultKids(response.data);
+          if (manifestKids.length > 0) {
+            const hasMatchingKid = manifestKids.some((kid) => clearKeys[kid]);
+            if (!hasMatchingKid) {
+              fail(
+                'Decryption key error',
+                `The video cannot be decrypted because the configured ClearKeys are wrong (stream requires Key ID ${manifestKids[0]}, but no matching key was provided).`,
+                { showProtectionAction: true }
+              );
+              return Promise.reject(new Error('ClearKey KID mismatch'));
+            }
+          }
           response.data = rewriteMpdForClearKey(response.data, firstKidHex);
         }
         return Promise.resolve(response);
@@ -1097,13 +1117,22 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
     }
 
     const handleProtectionOrDashError = (event, forceProtection = false) => {
-      if (current !== generation) return;
+      if (current !== generation || failed) return;
+      const hasClearKeys = Boolean(clearKeys && Object.keys(clearKeys).length);
+      if (hasClearKeys) {
+        fail(
+          'Decryption key error',
+          'This encrypted stream could not be decrypted with the configured keys. Please check that your KID:KEY hex pairs are correct.',
+          { showProtectionAction: true }
+        );
+        return;
+      }
       if (forceProtection || isLikelyProtectionError(event)) {
         const protText = getProtectionErrorText(event).slice(0, 400);
         fail(
           'Encrypted DASH stream requires Protection',
           'Key in decryption keys (KID:KEY pairs) or enter a license URL, optional request headers, and robustness level to play this encrypted .mpd stream.',
-          { showProtectionAction: true },
+          { showProtectionAction: true }
         );
         if (!protectionPrompting) {
           openProtectionModal({
@@ -1116,13 +1145,64 @@ async function startDashPlayback(url, current, effectiveHeaders, effectiveProtec
       const statusCode = errObj?.data?.response?.status ?? errObj?.data?.request?.status;
       if (errObj?.code === 27 || errObj?.code === 25 || statusCode) {
         networkFailure('DASH manifest or segment', statusCode);
-      } else if (errObj?.message) {
-        fail('DASH playback error', errObj.message, { showProtectionAction: true });
+      } else {
+        const msg = errObj?.message || errObj?.data?.message || getProtectionErrorText(event) || 'The video could not be played. Check that the stream and decryption settings are correct.';
+        fail('DASH playback error', msg, { showProtectionAction: true });
       }
     };
 
-    player.on('public_keyError', (ev) => handleProtectionOrDashError(ev, true));
+    player.on('public_keyError', (ev) => {
+      if (current !== generation || failed) return;
+      fail(
+        'Decryption key error',
+        'ClearKey decryption failed. Check that your KID:KEY hex pairs in Headers & Protection are correct.',
+        { showProtectionAction: true }
+      );
+    });
+
+    player.on('public_keyStatusesChanged', (ev) => {
+      if (current !== generation || failed) return;
+      const session = ev?.data;
+      if (session?.keyStatuses) {
+        for (const [kid, status] of session.keyStatuses.entries()) {
+          if (status === 'internal-error' || status === 'output-restricted') {
+            fail(
+              'Decryption key error',
+              `The media decrypter rejected the decryption key (status: ${status}). Please check your ClearKeys.`,
+              { showProtectionAction: true }
+            );
+            return;
+          }
+        }
+      }
+    });
+
+    player.on('playbackError', (ev) => handleProtectionOrDashError(ev));
+    player.on('sourceBufferError', (ev) => handleProtectionOrDashError(ev));
     player.on(events.ERROR || 'error', (ev) => handleProtectionOrDashError(ev, false));
+
+    if (dashClearKeys) {
+      clearTimeout(dashDecryptionWatchdog);
+      dashDecryptionWatchdog = setTimeout(() => {
+        if (current === generation && !failed && video.currentTime === 0 && video.readyState < 3) {
+          fail(
+            'Playback error: wrong decryption keys',
+            'The video is not playing and cannot decrypt frames. The configured decryption keys (KID:KEY) appear to be incorrect.',
+            { showProtectionAction: true }
+          );
+        }
+      }, 7000);
+      const onProgress = () => {
+        if (video.currentTime > 0.1 || video.readyState >= 3) {
+          clearTimeout(dashDecryptionWatchdog);
+          dashDecryptionWatchdog = null;
+          video.removeEventListener('timeupdate', onProgress);
+          video.removeEventListener('playing', onProgress);
+        }
+      };
+      video.addEventListener('timeupdate', onProgress);
+      video.addEventListener('playing', onProgress);
+    }
 
     player.initialize(video, url, false);
   } catch (error) {
@@ -1148,17 +1228,74 @@ function networkFailure(resource = 'video', code) {
 
 // --- Modal: Unified Headers & DASH Protection -------------------------------
 
-function openConfigModal({ detectedError = '', prefill = null, host = '' } = {}) {
-  protectionPrompting = true;
+function promptClearKeyPassword(context) {
+  pendingConfigArgs = context;
+  const modal = $('clearkey-password-modal');
+  const input = $('clearkey-pwd-input');
+  const err = $('clearkey-pwd-error');
+  if (!modal || !input) {
+    openConfigModal({ ...context, bypassPassword: true });
+    return;
+  }
+  input.value = '';
+  if (err) err.hidden = true;
+  modal.hidden = false;
+  setTimeout(() => input.focus(), 60);
+}
+
+function closePasswordModal(openConfig = true) {
+  const modal = $('clearkey-password-modal');
+  if (modal) modal.hidden = true;
+  const args = pendingConfigArgs;
+  pendingConfigArgs = null;
+  if (openConfig && args) {
+    openConfigModal({ ...args, bypassPassword: true });
+  }
+}
+
+function openConfigModal({ detectedError = '', prefill = null, host = '', bypassPassword = false } = {}) {
   const targetHost = normalizeHost(host) || currentTargetHost();
+  const targetUrl = currentTargetUrl();
+  const initialProt = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(targetHost || targetUrl, { fallbackToLast: false });
+  const hasSavedClearKeys = Boolean(initialProt?.clearKeys && Object.keys(initialProt.clearKeys).length);
+  const hostKey = targetHost || 'global';
+
+  if (hasSavedClearKeys && !bypassPassword && !unlockedProtectionHosts.has(hostKey)) {
+    promptClearKeyPassword({ detectedError, prefill, host, targetHost, initialProt });
+    return;
+  }
+
+  isClearKeyLocked = hasSavedClearKeys && !unlockedProtectionHosts.has(hostKey);
+  protectionPrompting = true;
   $('cfg-host-input').value = targetHost;
 
-  const targetUrl = currentTargetUrl();
   const existingHeaders = targetHost ? getHeadersForHost(targetHost) : customSessionHeaders;
   populateHeaderRows($('cfg-header-rows'), existingHeaders, ['Referer', '']);
 
-  const initialProt = prefill || (targetUrl ? resolveStreamProtection(targetUrl) : null) || getStoredProtectionConfig(targetHost || targetUrl, { fallbackToLast: false });
-  $('cfg-clearkeys').value = initialProt?.clearKeys ? formatClearKeys(initialProt.clearKeys, '\n') : '';
+  const lockStatusBtn = $('cfg-clearkey-lock-status');
+  if (hasSavedClearKeys) {
+    if (!isClearKeyLocked) {
+      $('cfg-clearkeys').value = formatClearKeys(initialProt.clearKeys, '\n');
+      if (lockStatusBtn) {
+        lockStatusBtn.style.display = 'inline-flex';
+        lockStatusBtn.textContent = '🔓 Unlocked';
+        lockStatusBtn.title = 'ClearKeys unlocked with password';
+        lockStatusBtn.disabled = true;
+      }
+    } else {
+      $('cfg-clearkeys').value = '';
+      if (lockStatusBtn) {
+        lockStatusBtn.style.display = 'inline-flex';
+        lockStatusBtn.textContent = '🔒 Hidden (click to unlock)';
+        lockStatusBtn.title = 'Click to enter password and view keys';
+        lockStatusBtn.disabled = false;
+      }
+    }
+  } else {
+    $('cfg-clearkeys').value = '';
+    if (lockStatusBtn) lockStatusBtn.style.display = 'none';
+  }
+
   $('cfg-license-url').value = initialProt?.licenseUrl || '';
   $('cfg-robustness').value = initialProt?.robustness || '';
 
@@ -1198,6 +1335,39 @@ $('cfg-close-x')?.addEventListener('click', closeConfigModal);
 $('cfg-cancel')?.addEventListener('click', closeConfigModal);
 $('stream-config-modal')?.addEventListener('click', (event) => {
   if (event.target === $('stream-config-modal')) closeConfigModal();
+});
+
+$('pwd-modal-form')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = $('clearkey-pwd-input');
+  const err = $('clearkey-pwd-error');
+  const entered = (input?.value || '').trim();
+  if (entered === CLEARKEY_PASSWORD) {
+    const hostKey = pendingConfigArgs?.targetHost || 'global';
+    unlockedProtectionHosts.add(hostKey);
+    closePasswordModal(true);
+  } else {
+    if (err) {
+      err.textContent = 'Incorrect password. ClearKeys will remain hidden.';
+      err.hidden = false;
+    }
+    setTimeout(() => {
+      closePasswordModal(true);
+    }, 700);
+  }
+});
+
+$('pwd-modal-cancel')?.addEventListener('click', () => closePasswordModal(true));
+$('pwd-modal-close')?.addEventListener('click', () => closePasswordModal(true));
+$('clearkey-password-modal')?.addEventListener('click', (e) => {
+  if (e.target === $('clearkey-password-modal')) closePasswordModal(true);
+});
+
+$('cfg-clearkey-lock-status')?.addEventListener('click', () => {
+  const currentHost = normalizeHost($('cfg-host-input').value) || currentTargetHost();
+  const currentProt = getStoredProtectionConfig(currentHost) || (currentHost === currentTargetHost() ? customSessionProtection : null);
+  $('stream-config-modal').hidden = true;
+  promptClearKeyPassword({ host: currentHost, prefill: currentProt });
 });
 
 $('cfg-add-header')?.addEventListener('click', () => {
@@ -1298,6 +1468,9 @@ $('cfg-save')?.addEventListener('click', () => {
       return;
     }
     clearKeys = parsedKeys.clearKeys;
+  } else if (isClearKeyLocked && host) {
+    const existingProt = getStoredProtectionConfig(host) || (host === currentTargetHost() ? customSessionProtection : null);
+    if (existingProt?.clearKeys) clearKeys = existingProt.clearKeys;
   }
 
   if (licenseUrl) {
@@ -1405,8 +1578,17 @@ video.addEventListener('error', () => {
     video.load();
     return;
   }
-  if (video.error.code === MediaError.MEDIA_ERR_NETWORK) networkFailure( FORMAT_LABELS[source.type] || 'video' );
-  else fail('This source could not be played', 'Check that this is a direct .m3u8, .mpd, .flv, .mp4, or .mkv URL and that its video/audio codecs are supported by your browser.');
+  if (video.error.code === MediaError.MEDIA_ERR_NETWORK) {
+    networkFailure(FORMAT_LABELS[source.type] || 'video');
+  } else if (isMediaEncrypted || source?.protection || video.error.code === MediaError.MEDIA_ERR_DECODE) {
+    fail(
+      'Decryption error: invalid keys',
+      'The video player failed to decode media frames. The configured ClearKey decryption keys or license settings appear to be incorrect.',
+      { showProtectionAction: true }
+    );
+  } else {
+    fail('This source could not be played', 'Check that this is a direct .m3u8, .mpd, .flv, .mp4, or .mkv URL and that its video/audio codecs are supported by your browser.');
+  }
 });
 
 // --- Form & Toolbar Actions ------------------------------------------------

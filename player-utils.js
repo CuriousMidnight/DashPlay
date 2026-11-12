@@ -277,6 +277,17 @@ export function createClearKeyJwkBuffer(clearKeys) {
   return new TextEncoder().encode(jwkString).buffer;
 }
 
+export function extractMpdDefaultKids(xmlText) {
+  if (typeof xmlText !== 'string') return [];
+  const matches = xmlText.matchAll(/(?:cenc:)?default_KID\s*=\s*["']([0-9a-fA-F-]+)["']/gi);
+  const kids = new Set();
+  for (const m of matches) {
+    const raw = m[1].replace(/-/g, '').toLowerCase();
+    if (raw.length === 32) kids.add(raw);
+  }
+  return Array.from(kids);
+}
+
 export function rewriteMpdForClearKey(xmlText, defaultKidHex = '') {
   if (typeof xmlText !== 'string' || !xmlText.includes('<MPD')) return xmlText;
   const fallbackKidUuid = defaultKidHex ? formatUuidKid(defaultKidHex) : '';
