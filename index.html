@@ -6,7 +6,7 @@
   <meta name="description" content="Open any .m3u8, .mpd, .flv, .mp4, or .mkv stream in your browser with Per-site request headers, DASH Protection, and instant shareable links.">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#0f1210">
-  <title>DashPlay — M3U8, MPD (DASH Protection), FLV, MP4 &amp; MKV Web Player</title>
+  <title>DashPlay — A modified Web Player</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d8542d'/%3E%3Cpath d='m11 8 13 8-13 8Z' fill='%23fff'/%3E%3C/svg%3E" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css?v=5">
   <script defer src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.js" onerror="this.onerror=null;this.src='vendor/mpegts-1.8.0.js'"></script>
@@ -148,8 +148,8 @@
         <div class="share-fallback-row">
           <label for="share-url">Shareable link (100% local):</label>
           <div class="share-mode-group" role="group" aria-label="Link style">
-            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="false" title="Short link using local storage &amp; streams.json in your GitHub Pages repo (?s=...)">Admin Only</button>
-            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="true" title="Self-contained binary-packed link for friends (?z=...) — zero third-party">Compact (?z=…)</button>
+            <button id="share-mode-short" class="preset-chip" type="button" data-share-mode="alias" aria-pressed="false" title="Short link  (?s=...)">Admin Only</button>
+            <button id="share-mode-compact" class="preset-chip" type="button" data-share-mode="compact" aria-pressed="true" title="Shareable link with friends (?z=...) — zero third-party">Normal (?z=…)</button>
           </div>
           <input id="share-url" readonly type="text" aria-label="Shareable player link">
           <button id="copy-share-again" class="primary-button share-copy-btn" type="button">Copy</button>
