@@ -8,18 +8,22 @@ DashPlay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DA
   - Automatic format detection from the URL, with a manual format selector (`Auto-detect`, `HLS (.m3u8)`, `DASH (.mpd)`, `FLV (.flv)`, `MP4 (.mp4)`, `MKV (.mkv)`).
   - Live stream support for HLS, DASH, FLV, and growing fragmented MP4 (`Live FLV / MP4`), with a **Live** button to jump to the live edge.
   - Adaptive or manual video quality selection for both HLS (`.m3u8`) master playlists and DASH (`.mpd`) multi-representation manifests.
-- **Per-site headers**:
+- **Combined Headers & Protection**:
   - Save custom request headers (such as `Referer`, `Origin`, `Authorization`, or custom token headers) per stream host (matching the host and its subdomains) for streams that otherwise return `403 Forbidden` errors.
-  - Applied to HLS (`hls.js`), DASH (`dash.js`), FLV (`mpegts.js`), and Live MP4 (`fetch`) requests, and persisted locally in `localStorage`.
-- **DASH Protection**:
-  - Enter a **License URL**, optional **License Request Headers**, and **Robustness Level** (e.g. `SW_SECURE_DECODE`, `SW_SECURE_CRYPTO`, `HW_SECURE_DECODE`) when an encrypted `.mpd` stream requires it.
-  - Automatically prompts when an encrypted DASH stream encounters a key-system or protection error, and optionally remembers configurations per stream host.
-- **Shareable links for friends**:
-  - Click **Copy shareable link** to generate a single link containing the stream URL, format, per-site request headers, and DASH Protection configuration:
-    - **Admin Only** (`?s=<slug>`) — Ultra-short preset links backed by `streams.json` in your GitHub repository (with one-click GitHub Auto-Sync for the repository owner).
-    - **Compact (`?z=…`)** — Self-contained compressed token links that work immediately for anyone without committing to `streams.json`.
-- **Save screenshot**:
-  - Download the current video frame as a full-resolution PNG.
+  - Applied to HLS (`hls.js`), DASH (`dash.js`), FLV (`mpegts.js`), and Live MP4 (`fetch`) requests.
+  - Enter a **License URL**, optional **License Request Headers**, and **Robustness Level** (e.g. `SW_SECURE_DECODE`, `SW_SECURE_CRYPTO`, `HW_SECURE_DECODE`) when an encrypted `.mpd` stream requires DRM.
+  - Multi-line ClearKey key-pair configuration (`KID:KEY` pairs separated by commas or newlines), with client-side WebCrypto PBKDF2 + AES-GCM password protection to prevent unauthorized viewing of sensitive keys in rules and edit views.
+  - Manifest KID verification to detect mismatched ClearKeys early and display clear error guidance.
+- **Playback Controls**:
+  - **Playback Speed Control**: YouTube-style speed popup offering a 0.5x–2.0x slider alongside quick presets (`1.0 Normal`, `1.25`, `1.5`, `2.0`).
+  - **Picture-in-Picture (PiP)**: Toggle floating Picture-in-Picture playback.
+  - **Web Fullscreen**: Expand video to cover the entire browser viewport without entering OS fullscreen.
+  - **Save Screenshot**: Instant full-resolution PNG capture with auto-fading feedback (dimmed when capturing DRM-encrypted streams to prevent black frames).
+- **Shareable Links**:
+  - **Compact (`?z=…`)**: Self-contained Base64URL packet obfuscated with a Caesar cipher (+3 shift) to prevent casual snooping of stream URLs and parameters. Works immediately without committing to any server. Legacy unshifted links remain fully supported via automatic fallback decoding.
+  - **Admin Only (`?s=<slug>`)**: Ultra-short preset links mapped to entries in `streams.json` in your GitHub repository.
+  - **Safe Manual GitHub Sync**: Clicking **Copy shareable link** or **Copy** copies the link to your clipboard without automatically saving or committing to `streams.json`. You can modify the URL slug/alias name first, then click **Save to GitHub** when ready.
+- **Default Dark Theme**: Clean, responsive dark interface with high-contrast playback controls.
 
 ## Hosting on GitHub Pages
 

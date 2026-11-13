@@ -1932,16 +1932,6 @@ async function copyShareableLink() {
     $('share-url').focus();
     $('share-url').select();
   }
-
-  const ghCfg = loadGithubSyncConfig();
-  if (shareLinkMode === 'alias' && !currentAliasInRepo && ghCfg.token) {
-    const ok = await pushCurrentStreamToGithub({ isAuto: true });
-    if (ok) {
-      const updated = getDisplayedShareUrl(buildShareSource());
-      $('share-url').value = updated;
-      try { await navigator.clipboard.writeText(updated); } catch { /* ignore */ }
-    }
-  }
 }
 
 $('copy-link').addEventListener('click', copyShareableLink);

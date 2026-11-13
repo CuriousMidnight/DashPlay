@@ -540,6 +540,20 @@ function unpackClearKeys(packed, blobs) {
   return null;
 }
 
+export function caesarCipher(text, shift = 3) {
+  if (typeof text !== 'string') return '';
+  const s = ((shift % 26) + 26) % 26;
+  return text.replace(/[a-zA-Z]/g, (char) => {
+    const code = char.charCodeAt(0);
+    const base = code >= 97 ? 97 : 65;
+    return String.fromCharCode(((code - base + s) % 26) + base);
+  });
+}
+
+export function caesarDecipher(text, shift = 3) {
+  return caesarCipher(text, -shift);
+}
+
 export function encodeCompactPacket(source) {
   const blobs = [];
   let autoDetected = null;
@@ -583,54 +597,71 @@ export function encodeCompactPacket(source) {
     offset += b.length;
   }
 
-  return bytesToBase64Url(packet);
+  const b64 = bytesToBase64Url(packet);
+  return caesarCipher(b64, 3);
+}
+
+function parseCompactBytes(packet) {
+  if (!packet || packet.length < 4 || packet[0] !== 0) return null;
+  let offset = 1;
+  const metaLen = (packet[offset] << 8) | packet[offset + 1];
+  offset += 2;
+  if (offset + metaLen > packet.length) return null;
+  const metaJson = new TextDecoder().decode(packet.subarray(offset, offset + metaLen));
+  offset += metaLen;
+  const meta = JSON.parse(metaJson);
+
+  const blobs = [];
+  while (offset + 2 <= packet.length) {
+    const bLen = (packet[offset] << 8) | packet[offset + 1];
+    offset += 2;
+    if (offset + bLen > packet.length) break;
+    blobs.push(packet.subarray(offset, offset + bLen));
+    offset += bLen;
+  }
+
+  const url = typeof meta.u === 'string' ? meta.u : '';
+  const type = SUPPORTED_FORMATS.includes(meta.t) ? meta.t : 'auto';
+  const headers = unpackHeaderMap(meta.h, blobs);
+  const clearKeys = unpackClearKeys(meta.k, blobs);
+  const protection = (meta.l || clearKeys)
+    ? sanitizeProtectionConfig({
+        licenseUrl: meta.l || undefined,
+        robustness: meta.r || undefined,
+        headers: unpackHeaderMap(meta.d, blobs),
+        clearKeys,
+      })
+    : null;
+
+  return {
+    url,
+    type,
+    live: meta.v === 1 ? true : isKnownLiveFLV(url, type),
+    headers,
+    protection,
+  };
 }
 
 export function decodeCompactPacket(encoded) {
   if (!encoded || typeof encoded !== 'string') return null;
+  const str = encoded.trim();
+
+  // Try Caesar decipher first (+3 shift inverted)
   try {
-    const packet = base64UrlToBytes(encoded.trim());
-    if (packet.length < 4 || packet[0] !== 0) return null;
-    let offset = 1;
-    const metaLen = (packet[offset] << 8) | packet[offset + 1];
-    offset += 2;
-    if (offset + metaLen > packet.length) return null;
-    const metaJson = new TextDecoder().decode(packet.subarray(offset, offset + metaLen));
-    offset += metaLen;
-    const meta = JSON.parse(metaJson);
+    const deciphered = caesarDecipher(str, 3);
+    const packet = base64UrlToBytes(deciphered);
+    const parsed = parseCompactBytes(packet);
+    if (parsed) return parsed;
+  } catch { /* try unshifted fallback */ }
 
-    const blobs = [];
-    while (offset + 2 <= packet.length) {
-      const bLen = (packet[offset] << 8) | packet[offset + 1];
-      offset += 2;
-      if (offset + bLen > packet.length) break;
-      blobs.push(packet.subarray(offset, offset + bLen));
-      offset += bLen;
-    }
+  // Fallback to unshifted raw Base64URL for backward compatibility
+  try {
+    const packet = base64UrlToBytes(str);
+    const parsed = parseCompactBytes(packet);
+    if (parsed) return parsed;
+  } catch { /* ignore */ }
 
-    const url = typeof meta.u === 'string' ? meta.u : '';
-    const type = SUPPORTED_FORMATS.includes(meta.t) ? meta.t : 'auto';
-    const headers = unpackHeaderMap(meta.h, blobs);
-    const clearKeys = unpackClearKeys(meta.k, blobs);
-    const protection = (meta.l || clearKeys)
-      ? sanitizeProtectionConfig({
-          licenseUrl: meta.l || undefined,
-          robustness: meta.r || undefined,
-          headers: unpackHeaderMap(meta.d, blobs),
-          clearKeys,
-        })
-      : null;
-
-    return {
-      url,
-      type,
-      live: meta.v === 1 ? true : isKnownLiveFLV(url, type),
-      headers,
-      protection,
-    };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 export function readSource(search, hash = '') {
