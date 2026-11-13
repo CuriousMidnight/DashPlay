@@ -22,7 +22,7 @@ DashPlay is a browser-based video player for direct **HLS (`.m3u8`)**, **MPEG-DA
 - **Shareable Links**:
   - **Normal (`?z=…`)**: Default way of sharing URL
   - **Admin Only (`?s=<slug>`)**: Ultra-short preset links
-  - **Safe Manual GitHub Sync**: Clicking **Copy shareable link** or **Copy** copies the link to your clipboard without automatically saving or committing to `streams.json`. You can modify the URL slug/alias name first, then click **Save to GitHub** when ready.
+  - **Safe Manual GitHub Sync**: Clicking **Copy shareable link** or **Copy** copies the link to your clipboard without automatically saving. You can modify the URL slug/alias name first, then click **Save to GitHub** when ready.
 - **Default Dark Theme**: Clean, responsive dark interface with high-contrast playback controls.
 
 ## Hosting on GitHub Pages
